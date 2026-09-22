@@ -93,8 +93,10 @@ X-Client-Version: 5.0.0-development
 - `POST /api/accounts/validateIdentity`
 - `POST /oauth/token`
 
-Everything else requires a bearer token (401 otherwise) — this is *not* a
-public storefront-style JSON API.
+Most Play endpoints require a bearer token (401 otherwise). There **is** a
+separate public host used by league microsites such as
+`games.pcaha.ca` — see "Public league-site API" below. That host is
+API-Key auth, not the account-owner bearer token.
 
 ### Multi-identity / tenant switching
 
@@ -129,7 +131,7 @@ consistent with a shared REST/CRUD helper wired to `apiClient`:
 | Resource | Notable action sub-routes |
 |---|---|
 | `accounts` | `logout`, `register`, `change-password`, `request-reset`, `reset-password`, `ssoCheckRedirect`, `ssoLinkAccount`, `ssoLinkAccountRedirect`, `ssoResetPassword`, `validateIdentity`, `current` |
-| `games` | `assign`, `applyAssignRules`, `availableOfficials`, `changeJerseyColors`, `changeStatus`, `forfeit`, `resetScoresheet`, `recalculateScoresheet`, `events`, `officialAssignments`, `requestAssignment`/`respondAssignment`/`removeAssignment`/`switchAssignment`/`delegateAssignment`, `validateMembers`, `bulkCertify`, `bulkDelegate`, `bulkDelete`, `bulkGameStatus`, `bulkAssignSettings`, `availabilities` |
+| `games` | `assign`, `applyAssignRules`, `availableOfficials`, `changeJerseyColors`, `changeStatus`, `forfeit`, `resetScoresheet`, `recalculateScoresheet`, `events`, `officials`, `officialAssignments`, `scoresheet`, `requestAssignment`/`respondAssignment`/`removeAssignment`/`switchAssignment`/`delegateAssignment`, `validateMembers`, `bulkCertify`, `bulkDelegate`, `bulkDelete`, `bulkGameStatus`, `bulkAssignSettings`, `availabilities` |
 | `draftgames` / `draftGameApprovals` | `bulkChangeDate`, `bulkChangeOrder`, `bulkChangeStatus`, `bulkDelete`, `bulkShare`, `{id}/respond` |
 | `practices` | `changeStatus`, `bulkDelete`, `bulkStatus`, `availabilities` |
 | `schedules` | `publish`, `generate`, `generateMatrix`, `importBrackets`, `deleteBracketGames`, `settings`, `updateManualRankings` |
@@ -163,6 +165,11 @@ consistent with a shared REST/CRUD helper wired to `apiClient`:
 | `GET /api/officialTransactions?filter={"where":{"participantId":X}}` | Bearer | Pay-ledger rows per game officiated: `date`, `amount`, `type`, `subtype` (Referee/Linesperson), `officeId` (the **paying** office, which can differ from the game's own `officeId`), `gameId` |
 | `GET /api/officialClaims?filter={"where":{"participantId":X}}` | Bearer | Expense-claim rows (empty for this account) |
 | `GET /api/officialAssignments` (top-level, no id) | Bearer | **404** — `"There is no method to handle GET /officialAssignments"`; this resource is only ever addressed as a sub-route of `/games/{id}/officialAssignments`, not as its own top-level list |
+| `GET /api/games/{id}/officialAssignments` | Bearer + `X-Identity` | 200 list of assignment slots (`position`, `status`, `notificationDate`) — **`participantId` and names are stripped** for an `assigning:official` identity. `include:["participant"]` does not restore them |
+| `GET /api/games/{id}/officials` | Bearer + `X-Identity` | 200 **named** crew. Same rows as officialAssignments but with `participantId` + nested `participant: {id, fullName, firstName, lastName}`. `X-Authorized-Roles: assigning:official`. This is the endpoint `--game-id` uses |
+| `GET /api/games/{id}/scoresheet` | Bearer + `X-Identity` | 200 scoresheet blob (`score`, `lineups`, `goals`, `penalties`, …) plus the same named `officials[]` as `/officials` |
+| `GET /api/games/{id}/events` | Bearer + `X-Identity` | 200 audit log. `officialAssigned` events embed `{official: {participant: {fullName, …}, participantId}, position}` — another way to recover names if `/officials` is unavailable |
+| `GET /api/games/{id}/availableOfficials` | Bearer + `X-Identity` | **403** `ACCESS_DENIED` for a plain official (assignor-only) |
 | `GET /api/apimetadatas/getVersion` | Bearer | 401 without a token; not tested authenticated |
 
 ### The real "Games" page call (captured live from the browser's own network traffic)
@@ -253,10 +260,12 @@ GET /api/<resource>?filter={"where":{"seasonId":"2026-27"},"include":["x"],"limi
 - `where` only matches columns on the **base model itself** — it cannot filter
   on a nested/joined field like `venue.name` inside `surfaces`, even though
   the response embeds that nested object.
-- `include` is accepted (LoopBack relation-include syntax) but didn't add any
-  visible fields in testing (e.g. `include:["homeTeam","awayTeam"]` on
-  `games` returned the game unchanged — those relations may not be wired
-  server-side, or need a different name).
+- `include` is accepted (LoopBack relation-include syntax). `include:["homeTeam","awayTeam"]`
+  on `games` still adds nothing, but **`include:["officials"]` works** — the
+  game object grows an `officials[]` array of the same named assignment
+  rows as `GET /api/games/{id}/officials`. `include:["surface","schedule","group","teamStats"]`
+  also hydrates those relations on the public league-site API (and on Play
+  when the identity can see them).
 - `limit` works as expected.
 - When a required param is missing, the API returns a `400` whose message
   **names the missing param verbatim** (e.g. `seasonId is a required
@@ -317,6 +326,26 @@ position (Referee/Linesperson), status (confirmed/...),
 notes, signature, notificationDate, participant: {...}, game: {...full Game...}
 ```
 
+**Official assignment row** (`/api/games/{id}/officials`, or `include:"officials"`):
+```
+id, gameId, officeId, payOfficeId, feesId, participantId,
+position (Referee/Linesperson/Scorekeeper/Timekeeper/Supervisor),
+status (confirmed | requested | pending | declined),
+notes, signature, notificationDate,
+participant: { id, fullName, firstName, lastName }
+```
+`/officialAssignments` returns the same slot list **minus** `participantId` /
+`participant` / `notes` for a non-assignor identity. Filter `status === "confirmed"`
+to hide requested/pending names (what the schedule web UI does).
+
+**Scoresheet PDF** (no Play bearer token required for a reachable game):
+```
+GET https://pdf.play.spordle.com/game/{id}
+→ 200 application/pdf
+   Content-Disposition: inline; filename="Game Report {number} - {date}.pdf"
+```
+`pdf.spordle.com` does not resolve; `pdf.play.spordle.com/scoresheet/{id}` is 404.
+
 **OfficialTransaction row** (`/api/officialTransactions`):
 ```
 id, participantId, gameId, officeId (the paying office — can differ from the
@@ -362,18 +391,51 @@ to be populated on the response.
   schedule details, but you can't always resolve the *name* of the team or
   office on the other end of it unless you have a direct relationship there.
 
+## Public league-site API (`games.pcaha.ca` / `api.play.spordle.com`)
+
+`games.pcaha.ca` is a Netlify SPA (`siteName: "Pacific Coast Amateur Hockey
+Association"`, `officeId: 15`) that does **not** use the Play bearer token.
+Its JS ships:
+
+```
+API_URL = "https://api.play.spordle.com/api"
+Authorization: API-Key <key embedded in the frontend bundle>
+```
+
+That key is a public site credential, not an account secret. Confirmed
+calls (same LoopBack `filter` / `where` vocabulary as Play):
+
+| Method & path | Notes |
+|---|---|
+| `GET /offices/{id}` / `GET /offices?filter={"where":{}}` | PCAHA is office `15` (`type: District`). Associations nest under path `467.1.2.15…` |
+| `GET /divisions?filter={"order":"order"}` | Age divisions (`U11`, `U13`, `U15`, …) with UUID `id` |
+| `GET /schedules?filter={"where":{"seasonId","officeId","category.divisionId",…},"include":"category"}` | Season/office/division-scoped schedule list |
+| `GET /groups?filter={"where":{"officeId","type"}}` | Groups (e.g. "Pre-season") under a schedule office |
+| `GET /games/count?where={…}` | `{"count": N}` |
+| `GET /games?filter={"where","include","order","limit","skip"}` | Default PCAHA day query is `where.and: [{date: "YYYY-MM-DDT00:00:00.000Z"}]` plus `include: ["surface","schedule","group","teamStats"]`. Adding `"officials"` to `include` attaches named crew |
+| `GET /teams?filter={"where":{"id":{"inq":[…]}},"scope":"Tenant"}` | Resolve home/away names for the page |
+
+Game `where` extras confirmed on this host:
+
+- `division` (string, e.g. `"U15"`) works. `divisionId` (UUID) **500**s — map the dropdown UUID to the division name first.
+- `gender`, `scheduleId`, `groupId` (`or: [{groupId}, {groupId: null}]`), `or: [{homeTeamId},{awayTeamId}]` for a team.
+- Association filter: top-level `officeId` is the **game's** office (PCAHA hockey office `786`), not the MHA. Use `effectiveOffices: <associationId>` (e.g. Burnaby `270`) to get that association's games.
+- Season on the site config can lag (`2025-26` while games are `2026-27`). The live games query is **by calendar date**, not season.
+
 ## What's still undocumented
 
 - Full CRUD verbs (`POST`/`PUT`/`DELETE`) on any resource — only `GET` calls
-  were made this session; the guide's own scope for "read a scoreboard" type
+  were made these sessions; the guide's own scope for "read a scoreboard" type
   automation doesn't need them, and testing writes against a real production
   system without a clear need wasn't done.
-- `X-Authorized-Roles` response header's exact shape (it's declared
-  CORS-exposed but its content wasn't inspected).
+- `X-Authorized-Roles` is now seen on several GETs (`assigning:official` on
+  `/officials` / `/scoresheet` / `/events`;
+  `scheduling:view,assigning:official,scoresheets:view` on the Authorized
+  games list). The full role grammar is still not mapped.
 - The dedicated "pending/unresponded assignment offer" flow
-  (`requestAssignment`/`respondAssignment` on `games`) — everything pulled
-  this session came from `assignHistory`, which only ever showed
-  already-`confirmed` rows.
+  (`requestAssignment`/`respondAssignment` on `games`) — `assignHistory`
+  only ever showed already-`confirmed` rows; `/officials` now also shows
+  `requested` rows, but the accept/decline POST was not exercised.
 
 ## Anti-bot / rate-limit / ethics notes (Phase 8)
 
