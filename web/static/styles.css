@@ -1,0 +1,217 @@
+:root {
+  --navy: #0d1d3b;
+  --navy-soft: #17305c;
+  --ink: #122033;
+  --muted: #5b6b80;
+  --line: #d7deea;
+  --paper: #f6f8fb;
+  --card: #ffffff;
+  --accent: #c8102e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0 auto;
+  max-width: 1100px;
+  padding: 28px 20px 64px;
+  color: var(--ink);
+  background: var(--paper);
+  font: 16px/1.45 "Titillium Web", "Segoe UI", sans-serif;
+}
+
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.kicker {
+  margin: 0 0 4px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 12px;
+}
+
+h1 {
+  margin: 0;
+  color: var(--navy);
+  font-size: 42px;
+  letter-spacing: -0.03em;
+}
+
+.source {
+  color: var(--navy);
+  font-size: 14px;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+select,
+input[type="date"] {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+
+.status {
+  color: var(--muted);
+  margin: 0 0 16px;
+}
+
+.games {
+  display: grid;
+  gap: 12px;
+}
+
+.game {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 16px 24px;
+  padding: 16px 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.title {
+  margin: 4px 0 6px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.venue {
+  color: var(--ink);
+}
+
+.score {
+  font-variant-numeric: tabular-nums;
+  color: var(--navy);
+}
+
+.officials {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #eef3fb;
+  color: var(--navy);
+  font-size: 13px;
+}
+
+.chip.none {
+  background: #f3f4f6;
+  color: var(--muted);
+}
+
+.chip .pos {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.sheet {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: var(--navy);
+  color: white;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sheet:hover {
+  background: var(--navy-soft);
+}
+
+.pager {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.pager button {
+  min-width: 40px;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--navy);
+  cursor: pointer;
+}
+
+.pager button[disabled] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.pager .current {
+  background: var(--navy);
+  color: white;
+  border-color: var(--navy);
+}
+
+@media (max-width: 720px) {
+  .game,
+  .side {
+    grid-template-columns: 1fr;
+    align-items: flex-start;
+  }
+
+  h1 {
+    font-size: 32px;
+  }
+}

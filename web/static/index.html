@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PCAHA Schedule</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div>
+        <p class="kicker">Pacific Coast Amateur Hockey Association</p>
+        <h1>Schedule</h1>
+      </div>
+      <a class="source" href="https://games.pcaha.ca" target="_blank" rel="noreferrer">games.pcaha.ca</a>
+    </header>
+
+    <form id="filters" class="filters">
+      <label>
+        Date
+        <input type="date" name="day" />
+      </label>
+      <label>
+        Season
+        <select name="season_id"></select>
+      </label>
+      <label>
+        Association
+        <select name="office_id"><option value="">All associations</option></select>
+      </label>
+      <label>
+        Division
+        <select name="division"><option value="">All divisions</option></select>
+      </label>
+      <label>
+        Gender
+        <select name="gender"><option value="">All genders</option></select>
+      </label>
+      <label>
+        Type
+        <select name="type"><option value="">All types</option></select>
+      </label>
+      <label>
+        Schedule
+        <select name="schedule_id"><option value="">All schedules</option></select>
+      </label>
+      <label>
+        Group
+        <select name="group_id"><option value="">All groups</option></select>
+      </label>
+    </form>
+
+    <p id="status" class="status">Loading filters…</p>
+    <div id="games" class="games"></div>
+    <nav id="pager" class="pager" hidden></nav>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

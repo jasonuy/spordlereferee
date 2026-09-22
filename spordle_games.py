@@ -19,6 +19,7 @@ Examples:
     export SPORDLE_UUID=<uuid-from-the-list-above>
     uv run spordle_games.py --season 2026-27
     uv run spordle_games.py --identity <uuid> --season 2026-27 --from-date 2026-01-01 --format json
+    uv run spordle_games.py --game-id 910874
 """
 
 from __future__ import annotations
@@ -190,6 +191,21 @@ class SpordleClient:
         filt = {"where": {"id": {"inq": sorted(ids)}}, "scope": "Tenant"}
         resp = self._get(f"{API}/{resource}", params={"filter": json.dumps(filt)})
         return {item["id"]: item for item in resp.json()}
+
+    def game(self, game_id: int) -> dict:
+        resp = self.session.get(f"{API}/games/{game_id}")
+        if resp.status_code == 404:
+            sys.exit(f"Game {game_id} not found")
+        resp.raise_for_status()
+        return resp.json()
+
+    def officials(self, game_id: int) -> list[dict]:
+        """Assigned officials with nested participant names.
+
+        `/officialAssignments` only returns fill/status (names are stripped).
+        `/officials` is the scoresheet-side list that includes `participant`.
+        """
+        return self._get(f"{API}/games/{game_id}/officials").json()
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -409,6 +425,82 @@ def write_output(games: list[Game], output: Path, fmt: str) -> None:
     write_rows([g.__dict__ for g in games], output, fmt)
 
 
+_POSITION_ORDER = {
+    "Referee": 0,
+    "Linesperson": 1,
+    "Scorekeeper": 2,
+    "Timekeeper": 3,
+    "Supervisor": 4,
+}
+
+
+def official_name(assignment: dict) -> str | None:
+    participant = assignment.get("participant") or {}
+    return (
+        participant.get("fullName")
+        or " ".join(filter(None, [participant.get("firstName"), participant.get("lastName")]))
+        or None
+    )
+
+
+def show_game_officials(client: SpordleClient, game_id: int, fmt: str) -> None:
+    game = client.game(game_id)
+    officials = client.officials(game_id)
+    team_ids = {t for t in (game.get("homeTeamId"), game.get("awayTeamId")) if t}
+    teams = client.lookup("teams", team_ids)
+    home = teams.get(game.get("homeTeamId"), {}).get("name") or "TBD"
+    away = teams.get(game.get("awayTeamId"), {}).get("name") or "TBD"
+
+    crew = []
+    for assignment in officials:
+        name = official_name(assignment)
+        if not name:
+            continue
+        crew.append(
+            {
+                "position": assignment.get("position") or "Official",
+                "name": name,
+                "status": assignment.get("status"),
+            }
+        )
+    crew.sort(key=lambda r: (_POSITION_ORDER.get(r["position"], 99), r["name"]))
+
+    row = {
+        "id": game.get("id", game_id),
+        "number": game.get("number"),
+        "date": game.get("date"),
+        "division": game.get("division"),
+        "category": game.get("category"),
+        "home": home,
+        "away": away,
+        "officials": crew,
+    }
+
+    if fmt == "json":
+        print(json.dumps(row, indent=2))
+        return
+
+    header = "  ".join(
+        filter(
+            None,
+            [
+                str(row["number"] or row["id"]),
+                row["date"],
+                f"{row['division'] or ''} {row['category'] or ''}".strip(),
+                f"{home} vs {away}",
+            ],
+        )
+    )
+    print(header)
+    if not crew:
+        print("  No officials assigned")
+        return
+    width = max(len(r["position"]) for r in crew)
+    for r in crew:
+        status = f"  ({r['status']})" if r["status"] else ""
+        print(f"  {r['position']:<{width}}  {r['name']}{status}")
+
+
 def rinks_by_distance(rinks: list[dict], home: str, driving: bool = False) -> list[dict]:
     surfaces = {s["id"]: s for s in rinks}
     distances = compute_distances(surfaces, home, driving)
@@ -443,6 +535,12 @@ def main() -> None:
         help="identity UUID to switch to; see --list-identities (or set SPORDLE_UUID)",
     )
     parser.add_argument("--list-identities", action="store_true", help="print available identities and exit")
+    parser.add_argument(
+        "--game-id",
+        type=int,
+        default=None,
+        help="print assigned official names for this game and exit",
+    )
     parser.add_argument("--city", default=None, help="only games at rinks in this city (substring, case-insensitive)")
     parser.add_argument("--rink", default=None, help="only games at rinks whose venue name matches this (substring, case-insensitive)")
     parser.add_argument("--list-rinks", action="store_true", help="print matching rinks and exit instead of fetching games")
@@ -487,6 +585,10 @@ def main() -> None:
         primary = next((i for i in identities if i.get("isPrimary")), identities[0])
         client.set_identity(primary["id"])
         account = client.current_account()
+
+    if args.game_id is not None:
+        show_game_officials(client, args.game_id, args.format)
+        return
 
     season = args.season or account.get("seasonId")
     from_date = args.from_date or date.today().isoformat()

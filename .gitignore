@@ -1,3 +1,8 @@
 .DS_Store
+__pycache__/
+*.pyc
 data/.geocode_cache.json
 data/.driving_cache.json
+data/*_games.json
+data/*_rosemary_brown.json
+web/.venv/
