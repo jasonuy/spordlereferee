@@ -3,15 +3,11 @@
 <!--
   Studio LaunchAgent for the PCAHA schedule + standings web UI.
 
-  App root: ~/projects/pcaha-schedule
-  Default listen: 0.0.0.0:8765
-  For :80, either set PCAHA_PORT=80 with a privileged LaunchDaemon, or put
-  nginx/Caddy on :80 proxying to 8765.
+  IMPORTANT: Keep this on INTERNAL disk (~/pcaha-schedule).
+  LaunchAgents cannot run scripts from /Volumes/External Drive
+  (~/projects is often a symlink to that volume).
 
-  Install:
-    cp deploy/com.jasonuy.pcaha-schedule.plist ~/Library/LaunchAgents/
-    chmod +x ~/projects/pcaha-schedule/deploy/pcaha-web.sh
-    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jasonuy.pcaha-schedule.plist
+  Listens on 0.0.0.0:8765 (http://192.168.5.156:8765 on LAN).
 -->
 <plist version="1.0">
   <dict>
@@ -20,10 +16,10 @@
     <key>ProgramArguments</key>
     <array>
       <string>/bin/bash</string>
-      <string>/Users/jasonbot/projects/pcaha-schedule/deploy/pcaha-web.sh</string>
+      <string>/Users/jasonbot/pcaha-schedule/deploy/pcaha-web.sh</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/jasonbot/projects/pcaha-schedule/web</string>
+    <string>/Users/jasonbot/pcaha-schedule/web</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -35,11 +31,11 @@
     <key>EnvironmentVariables</key>
     <dict>
       <key>PCAHA_ROOT</key>
-      <string>/Users/jasonbot/projects/pcaha-schedule</string>
+      <string>/Users/jasonbot/pcaha-schedule</string>
       <key>PCAHA_DB</key>
-      <string>/Users/jasonbot/projects/pcaha-schedule/data/pcaha.db</string>
+      <string>/Users/jasonbot/pcaha-schedule/data/pcaha.db</string>
       <key>PCAHA_SCORESHEET_CACHE</key>
-      <string>/Users/jasonbot/projects/pcaha-schedule/data/scoresheets</string>
+      <string>/Users/jasonbot/pcaha-schedule/data/scoresheets</string>
       <key>PCAHA_HOST</key>
       <string>0.0.0.0</string>
       <key>PCAHA_PORT</key>

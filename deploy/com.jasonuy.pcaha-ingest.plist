@@ -3,17 +3,8 @@
 <!--
   Studio LaunchAgent for nightly PCAHA scoresheet ingest.
 
-  Install on Studio:
-    mkdir -p ~/projects/pcaha-schedule/deploy ~/Library/LaunchAgents ~/Library/Logs
-    cp deploy/pcaha-ingest.sh ~/projects/pcaha-schedule/deploy/
-    cp deploy/com.jasonuy.pcaha-ingest.plist ~/Library/LaunchAgents/
-    chmod +x ~/projects/pcaha-schedule/deploy/pcaha-ingest.sh
-    launchctl unload ~/Library/LaunchAgents/com.jasonuy.pcaha-ingest.plist 2>/dev/null || true
-    launchctl load ~/Library/LaunchAgents/com.jasonuy.pcaha-ingest.plist
-
-  Runs at 02:15 America/Vancouver (Studio local time should be set to that TZ).
-  Logs: ~/Library/Logs/pcaha-ingest.log
-  DB:   ~/projects/pcaha-schedule/data/pcaha.db
+  Keep on INTERNAL disk (~/pcaha-schedule) — LaunchAgents cannot use
+  /Volumes/External Drive.
 -->
 <plist version="1.0">
   <dict>
@@ -22,10 +13,10 @@
     <key>ProgramArguments</key>
     <array>
       <string>/bin/bash</string>
-      <string>/Users/jasonbot/projects/pcaha-schedule/deploy/pcaha-ingest.sh</string>
+      <string>/Users/jasonbot/pcaha-schedule/deploy/pcaha-ingest.sh</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/jasonbot/projects/pcaha-schedule/web</string>
+    <string>/Users/jasonbot/pcaha-schedule/web</string>
     <key>StartCalendarInterval</key>
     <dict>
       <key>Hour</key>
@@ -40,11 +31,11 @@
     <key>EnvironmentVariables</key>
     <dict>
       <key>PCAHA_ROOT</key>
-      <string>/Users/jasonbot/projects/pcaha-schedule</string>
+      <string>/Users/jasonbot/pcaha-schedule</string>
       <key>PCAHA_DB</key>
-      <string>/Users/jasonbot/projects/pcaha-schedule/data/pcaha.db</string>
+      <string>/Users/jasonbot/pcaha-schedule/data/pcaha.db</string>
       <key>PCAHA_SCORESHEET_CACHE</key>
-      <string>/Users/jasonbot/projects/pcaha-schedule/data/scoresheets</string>
+      <string>/Users/jasonbot/pcaha-schedule/data/scoresheets</string>
       <key>PCAHA_SEASON</key>
       <string>2026-27</string>
       <key>PATH</key>

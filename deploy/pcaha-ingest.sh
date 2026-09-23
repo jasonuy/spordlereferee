@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-ROOT="${PCAHA_ROOT:-$HOME/projects/pcaha-schedule}"
+ROOT="${PCAHA_ROOT:-$HOME/pcaha-schedule}"
 LOG_DIR="${HOME}/Library/Logs"
 LOG_FILE="${LOG_DIR}/pcaha-ingest.log"
 DB="${PCAHA_DB:-$ROOT/data/pcaha.db}"

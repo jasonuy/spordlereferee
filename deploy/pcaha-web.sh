@@ -2,7 +2,7 @@
 # Start / keep-alive helper for the PCAHA web UI on Studio.
 set -euo pipefail
 
-ROOT="${PCAHA_ROOT:-$HOME/projects/pcaha-schedule}"
+ROOT="${PCAHA_ROOT:-$HOME/pcaha-schedule}"
 LOG_DIR="${HOME}/Library/Logs"
 mkdir -p "$LOG_DIR" "$ROOT/data"
 

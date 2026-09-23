@@ -9,7 +9,9 @@
 set -euo pipefail
 
 STUDIO_HOST="${STUDIO_HOST:-jasonbot@192.168.5.156}"
-REMOTE_ROOT="${REMOTE_ROOT:-/Users/jasonbot/projects/pcaha-schedule}"
+# MUST be on internal disk — LaunchAgents cannot execute from /Volumes/External Drive
+# (~/projects is often a symlink to the external volume on Studio).
+REMOTE_ROOT="${REMOTE_ROOT:-/Users/jasonbot/pcaha-schedule}"
 BRANCH="${BRANCH:-cursor/pcaha-stats-standings-22f9}"
 SEASON="${PCAHA_SEASON:-2026-27}"
 APP_PORT="${PCAHA_PORT:-8765}"
