@@ -1,10 +1,10 @@
 #!/bin/bash
-# Deploy PCAHA schedule + standings to Mac Studio and restart the web service.
-# Run from a machine that can reach Studio (LAN / SSH), e.g. Jason's MacBook.
+# Fast deploy: rsync local checkout → Mac Studio and restart the web service.
+# Run on a LAN Mac (e.g. MacBook) that can SSH to Studio.
 #
-# Usage:
+# Usage (from repo root):
 #   ./deploy/deploy-studio.sh
-#   STUDIO_HOST=jasonbot@192.168.5.156 BRANCH=cursor/pcaha-stats-standings-22f9 ./deploy/deploy-studio.sh
+#   STUDIO_HOST=jasonbot@192.168.5.156 ./deploy/deploy-studio.sh
 
 set -euo pipefail
 
@@ -13,49 +13,43 @@ REMOTE_ROOT="${REMOTE_ROOT:-/Users/jasonbot/pcaha-schedule}"
 BRANCH="${BRANCH:-cursor/pcaha-stats-standings-22f9}"
 REPO_URL="${REPO_URL:-https://github.com/jasonuy/spordlereferee.git}"
 SEASON="${PCAHA_SEASON:-2026-27}"
+LOCAL_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-echo "==> Deploying $BRANCH to $STUDIO_HOST:$REMOTE_ROOT"
+echo "==> Ensuring local branch $BRANCH"
+cd "$LOCAL_ROOT"
+git fetch origin
+git checkout "$BRANCH"
+git pull --ff-only origin "$BRANCH" || git pull --ff-only
 
+echo "==> Rsync app → $STUDIO_HOST:$REMOTE_ROOT"
+ssh -o ConnectTimeout=15 "$STUDIO_HOST" "mkdir -p '$REMOTE_ROOT' '$REMOTE_ROOT/data/scoresheets' '$REMOTE_ROOT/deploy' '\$HOME/Library/LaunchAgents' '\$HOME/Library/Logs'"
+
+rsync -az --delete \
+  --exclude '.git/' \
+  --exclude 'data/pcaha.db' \
+  --exclude 'data/pcaha.db-*' \
+  --exclude 'data/scoresheets/' \
+  --exclude 'web/.venv/' \
+  --exclude '__pycache__/' \
+  --exclude '*.pyc' \
+  --exclude '.DS_Store' \
+  "$LOCAL_ROOT/" "$STUDIO_HOST:$REMOTE_ROOT/"
+
+echo "==> Restart web + optional ingest on Studio"
 ssh -o ConnectTimeout=15 "$STUDIO_HOST" bash -s <<EOF
 set -euo pipefail
 ROOT="$REMOTE_ROOT"
-BRANCH="$BRANCH"
-REPO_URL="$REPO_URL"
 SEASON="$SEASON"
 
-mkdir -p "\$ROOT" "\$HOME/Library/LaunchAgents" "\$HOME/Library/Logs" "\$ROOT/data/scoresheets" "\$ROOT/deploy"
+chmod +x "\$ROOT/deploy/"*.sh "\$ROOT/web/ingest.py" 2>/dev/null || true
+cp "\$ROOT/deploy/com.jasonuy.pcaha-ingest.plist" "\$HOME/Library/LaunchAgents/" 2>/dev/null || true
+cp "\$ROOT/deploy/com.jasonuy.pcaha-schedule.plist" "\$HOME/Library/LaunchAgents/"
 
-# Studio may already have a non-git copy from an earlier rsync deploy.
-if [[ -d "\$ROOT/.git" ]]; then
-  cd "\$ROOT"
-  git remote set-url origin "\$REPO_URL" 2>/dev/null || git remote add origin "\$REPO_URL"
-  git fetch origin
-  git checkout -B "\$BRANCH" "origin/\$BRANCH"
-  git reset --hard "origin/\$BRANCH"
-elif [[ -n "\$(ls -A "\$ROOT" 2>/dev/null)" ]]; then
-  echo "==> Existing non-git tree at \$ROOT — attaching origin and checking out \$BRANCH"
-  cd "\$ROOT"
-  git init
-  git remote add origin "\$REPO_URL" 2>/dev/null || git remote set-url origin "\$REPO_URL"
-  git fetch origin
-  # -f keeps untracked data/ (DB, scoresheet cache) while replacing app files
-  git checkout -f -B "\$BRANCH" "origin/\$BRANCH"
-else
-  git clone --branch "\$BRANCH" "\$REPO_URL" "\$ROOT"
-  cd "\$ROOT"
-fi
-
-# Prefer internal-disk python (LaunchAgents cannot use /Volumes/External Drive)
 if [[ -x "\$ROOT/web/.venv/bin/python" ]]; then
   PYTHON="\$ROOT/web/.venv/bin/python"
-elif command -v python3 >/dev/null 2>&1; then
-  PYTHON="\$(command -v python3)"
 else
-  echo "No python3 on Studio" >&2
-  exit 1
+  PYTHON="\$(command -v python3)"
 fi
-
-# Ensure deps
 "\$PYTHON" -c "import fastapi, uvicorn, requests" 2>/dev/null || \
   "\$PYTHON" -m pip install --user 'fastapi>=0.115' 'uvicorn>=0.32' 'requests>=2.32'
 
@@ -64,43 +58,46 @@ export PCAHA_SCORESHEET_CACHE="\$ROOT/data/scoresheets"
 export PCAHA_HOST=0.0.0.0
 export PCAHA_PORT=8765
 
-# Install LaunchAgents
-cp "\$ROOT/deploy/pcaha-ingest.sh" "\$ROOT/deploy/pcaha-ingest.sh"
-chmod +x "\$ROOT/deploy/pcaha-ingest.sh" "\$ROOT/web/ingest.py"
-cp "\$ROOT/deploy/com.jasonuy.pcaha-ingest.plist" "\$HOME/Library/LaunchAgents/"
-cp "\$ROOT/deploy/com.jasonuy.pcaha-schedule.plist" "\$HOME/Library/LaunchAgents/"
-chmod +x "\$ROOT/deploy/pcaha-web.sh"
-
-# Ingest / refresh rollups (uses disk cache; polite to API for new games)
 cd "\$ROOT/web"
 if [[ ! -f "\$PCAHA_DB" ]]; then
-  echo "==> First-time full ingest..."
+  echo "==> First-time full ingest (several minutes)..."
   "\$PYTHON" ingest.py --season "\$SEASON"
 else
-  echo "==> Incremental ingest (yesterday + catch-up)..."
+  echo "==> Refreshing rollups / recent games..."
   "\$PYTHON" ingest.py --season "\$SEASON" --yesterday || true
-  "\$PYTHON" ingest.py --season "\$SEASON"
+  "\$PYTHON" ingest.py --rebuild-only --season "\$SEASON" || \
+    "\$PYTHON" ingest.py --season "\$SEASON"
 fi
 
-# Restart web LaunchAgent
-launchctl bootout "gui/\$(id -u)/com.jasonuy.pcaha-schedule" 2>/dev/null || true
-launchctl bootstrap "gui/\$(id -u)" "\$HOME/Library/LaunchAgents/com.jasonuy.pcaha-schedule.plist" 2>/dev/null \
-  || launchctl load "\$HOME/Library/LaunchAgents/com.jasonuy.pcaha-schedule.plist"
-launchctl kickstart -k "gui/\$(id -u)/com.jasonuy.pcaha-schedule" 2>/dev/null \
+# Stop any ad-hoc server on 8765, then KeepAlive LaunchAgent
+if command -v lsof >/dev/null 2>&1; then
+  PIDS=\$(lsof -tiTCP:8765 -sTCP:LISTEN 2>/dev/null || true)
+  if [[ -n "\${PIDS:-}" ]]; then
+    echo "==> Stopping old process(es) on :8765: \$PIDS"
+    kill \$PIDS 2>/dev/null || true
+    sleep 1
+  fi
+fi
+
+UID_NUM=\$(id -u)
+launchctl bootout "gui/\$UID_NUM/com.jasonuy.pcaha-schedule" 2>/dev/null || true
+launchctl bootstrap "gui/\$UID_NUM" "\$HOME/Library/LaunchAgents/com.jasonuy.pcaha-schedule.plist" 2>/dev/null \
+  || launchctl load -w "\$HOME/Library/LaunchAgents/com.jasonuy.pcaha-schedule.plist"
+launchctl kickstart -k "gui/\$UID_NUM/com.jasonuy.pcaha-schedule" 2>/dev/null \
   || launchctl start com.jasonuy.pcaha-schedule || true
 
-# Also load ingest agent (does not run until schedule)
-launchctl bootout "gui/\$(id -u)/com.jasonuy.pcaha-ingest" 2>/dev/null || true
-launchctl bootstrap "gui/\$(id -u)" "\$HOME/Library/LaunchAgents/com.jasonuy.pcaha-ingest.plist" 2>/dev/null \
-  || launchctl load "\$HOME/Library/LaunchAgents/com.jasonuy.pcaha-ingest.plist" || true
+launchctl bootout "gui/\$UID_NUM/com.jasonuy.pcaha-ingest" 2>/dev/null || true
+launchctl bootstrap "gui/\$UID_NUM" "\$HOME/Library/LaunchAgents/com.jasonuy.pcaha-ingest.plist" 2>/dev/null \
+  || launchctl load -w "\$HOME/Library/LaunchAgents/com.jasonuy.pcaha-ingest.plist" || true
 
 sleep 2
-curl -fsS "http://127.0.0.1:8765/api/stats/meta" || curl -fsS "http://127.0.0.1:8765/" >/dev/null
+curl -fsS "http://127.0.0.1:8765/" | grep -q 'Standings' && echo "==> HTML has Standings tab"
+curl -fsS "http://127.0.0.1:8765/api/stats/meta" || true
 echo "==> Studio ready at http://192.168.5.156:8765"
 EOF
 
 echo "==> Verifying from this machine..."
+html=\$(curl -fsS --connect-timeout 5 "http://192.168.5.156:8765/" || true)
+echo "\$html" | grep -o 'Schedule\|Standings' | sort | uniq -c || echo "(could not fetch HTML)"
 curl -fsS --connect-timeout 5 "http://192.168.5.156:8765/api/stats/meta" && echo
-curl -fsS --connect-timeout 5 "http://192.168.5.156:8765/" | head -c 200
-echo
-echo "Done. Open http://192.168.5.156:8765 — tabs: Schedule | Standings"
+echo "Done. Hard-refresh the browser (Cmd+Shift+R) on http://192.168.5.156:8765"
