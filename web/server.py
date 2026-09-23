@@ -898,8 +898,8 @@ def standings_schedules(season_id: str = Query("2026-27")) -> list:
 
 
 if __name__ == "__main__":
-    uvicorn.run(
+        uvicorn.run(
         app,
-        host=os.environ.get("PCAHA_HOST", "127.0.0.1"),
+        host=os.environ.get("PCAHA_HOST", "0.0.0.0"),
         port=int(os.environ.get("PCAHA_PORT", "8765")),
     )

@@ -20,10 +20,8 @@
       </div>
       <div class="top-right">
         <nav class="main-nav" aria-label="Primary">
-          <a href="#/schedule" data-nav="schedule">Schedule</a>
-          <a href="#/standings" data-nav="standings">Standings</a>
-          <a href="#/leaders" data-nav="leaders">Leaders</a>
-          <a href="#/search" data-nav="search">Search</a>
+          <a href="#/schedule" data-nav="schedule" class="tab">Schedule</a>
+          <a href="#/standings" data-nav="standings" class="tab">Standings</a>
         </nav>
         <a class="source" href="https://games.pcaha.ca" target="_blank" rel="noreferrer">games.pcaha.ca</a>
       </div>
@@ -70,6 +68,11 @@
     </section>
 
     <section id="view-standings" class="view" hidden>
+      <nav class="sub-nav" aria-label="Standings sections">
+        <a href="#/standings" data-subnav="standings">League table</a>
+        <a href="#/leaders" data-subnav="leaders">Leaders</a>
+        <a href="#/search" data-subnav="search">Search</a>
+      </nav>
       <form id="standings-filters" class="filters">
         <label>
           Season
@@ -100,6 +103,11 @@
     </section>
 
     <section id="view-leaders" class="view" hidden>
+      <nav class="sub-nav" aria-label="Standings sections">
+        <a href="#/standings" data-subnav="standings">League table</a>
+        <a href="#/leaders" data-subnav="leaders" class="active">Leaders</a>
+        <a href="#/search" data-subnav="search">Search</a>
+      </nav>
       <form id="leaders-filters" class="filters">
         <label>
           Season
@@ -125,6 +133,11 @@
     </section>
 
     <section id="view-search" class="view" hidden>
+      <nav class="sub-nav" aria-label="Standings sections">
+        <a href="#/standings" data-subnav="standings">League table</a>
+        <a href="#/leaders" data-subnav="leaders">Leaders</a>
+        <a href="#/search" data-subnav="search" class="active">Search</a>
+      </nav>
       <form id="search-form" class="filters search-form">
         <label class="grow">
           Search players or teams

@@ -102,8 +102,18 @@ function showView(name, title) {
     el.hidden = key !== name;
   }
   pageTitle.textContent = title;
+  const standingsFamily = ["standings", "team", "leaders", "player", "search", "game"];
+  const topTab = standingsFamily.includes(name) ? "standings" : "schedule";
   document.querySelectorAll(".main-nav a").forEach((a) => {
-    a.classList.toggle("active", a.dataset.nav === name);
+    a.classList.toggle("active", a.dataset.nav === topTab);
+  });
+  document.querySelectorAll(".sub-nav a").forEach((a) => {
+    const sub = a.dataset.subnav;
+    const active =
+      (sub === "standings" && (name === "standings" || name === "team" || name === "game")) ||
+      (sub === "leaders" && name === "leaders") ||
+      (sub === "search" && (name === "search" || name === "player"));
+    a.classList.toggle("active", active);
   });
 }
 
