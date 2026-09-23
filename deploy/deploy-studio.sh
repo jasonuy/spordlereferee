@@ -25,14 +25,25 @@ SEASON="$SEASON"
 
 mkdir -p "\$ROOT" "\$HOME/Library/LaunchAgents" "\$HOME/Library/Logs" "\$ROOT/data/scoresheets" "\$ROOT/deploy"
 
-if [[ ! -d "\$ROOT/.git" ]]; then
-  git clone "\$REPO_URL" "\$ROOT"
+# Studio may already have a non-git copy from an earlier rsync deploy.
+if [[ -d "\$ROOT/.git" ]]; then
+  cd "\$ROOT"
+  git remote set-url origin "\$REPO_URL" 2>/dev/null || git remote add origin "\$REPO_URL"
+  git fetch origin
+  git checkout -B "\$BRANCH" "origin/\$BRANCH"
+  git reset --hard "origin/\$BRANCH"
+elif [[ -n "\$(ls -A "\$ROOT" 2>/dev/null)" ]]; then
+  echo "==> Existing non-git tree at \$ROOT — attaching origin and checking out \$BRANCH"
+  cd "\$ROOT"
+  git init
+  git remote add origin "\$REPO_URL" 2>/dev/null || git remote set-url origin "\$REPO_URL"
+  git fetch origin
+  # -f keeps untracked data/ (DB, scoresheet cache) while replacing app files
+  git checkout -f -B "\$BRANCH" "origin/\$BRANCH"
+else
+  git clone --branch "\$BRANCH" "\$REPO_URL" "\$ROOT"
+  cd "\$ROOT"
 fi
-
-cd "\$ROOT"
-git fetch origin
-git checkout "\$BRANCH"
-git pull --ff-only origin "\$BRANCH"
 
 # Prefer internal-disk python (LaunchAgents cannot use /Volumes/External Drive)
 if [[ -x "\$ROOT/web/.venv/bin/python" ]]; then
