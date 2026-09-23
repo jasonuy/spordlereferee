@@ -196,6 +196,26 @@ def title_case_name(name: str | None) -> str:
     return " ".join(part.capitalize() for part in name.split())
 
 
+def _is_staff_positions(positions: str | None) -> bool:
+    if not positions:
+        return False
+    parts = [p.strip().lower() for p in str(positions).split(",") if p.strip()]
+    if not parts:
+        return False
+    staff = {
+        "head coach",
+        "assistant coach",
+        "coach",
+        "manager",
+        "trainer",
+        "safety person",
+        "safety",
+        "hcsp",
+        "staff",
+    }
+    return all(p in staff or "coach" in p or "manager" in p or "trainer" in p for p in parts)
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC / "index.html")
@@ -465,7 +485,12 @@ def team_roster(
         sql += " ORDER BY is_goalie ASC, p DESC, g DESC, player_name ASC"
         players = rows_to_dicts(conn.execute(sql, params).fetchall())
 
-        skaters = [p for p in players if not p.get("is_goalie")]
+        skaters = [
+            p
+            for p in players
+            if not p.get("is_goalie")
+            and not _is_staff_positions(p.get("positions"))
+        ]
         goalies = [p for p in players if p.get("is_goalie")]
 
         # Recent games for this team

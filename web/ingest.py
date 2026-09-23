@@ -44,7 +44,30 @@ DURATION_PIM = {
     "benchminor": 2.0,
 }
 
+STAFF_POSITIONS = {
+    "head coach",
+    "assistant coach",
+    "coach",
+    "manager",
+    "trainer",
+    "safety person",
+    "safety",
+    "hcsp",
+    "staff",
+}
+
 log = logging.getLogger("pcaha-ingest")
+
+
+def is_staff_positions(positions) -> bool:
+    if not positions:
+        return False
+    if isinstance(positions, str):
+        positions = [p.strip() for p in positions.split(",") if p.strip()]
+    norms = [str(p).strip().lower() for p in positions if p]
+    if not norms:
+        return False
+    return all(p in STAFF_POSITIONS or "coach" in p or "manager" in p or "trainer" in p for p in norms)
 
 
 def session() -> requests.Session:
@@ -437,9 +460,11 @@ def ingest_game(
             pid = member.get("participantId") or part.get("id")
             if pid is None or pid in seen:
                 continue
+            positions = member.get("positions") or []
+            if is_staff_positions(positions):
+                continue
             seen.add(pid)
             upsert_player(conn, {**part, "id": pid})
-            positions = member.get("positions") or []
             conn.execute(
                 """
                 INSERT INTO lineup_entries(
