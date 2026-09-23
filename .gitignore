@@ -5,4 +5,7 @@ data/.geocode_cache.json
 data/.driving_cache.json
 data/*_games.json
 data/*_rosemary_brown.json
+data/pcaha.db
+data/pcaha.db-*
+data/scoresheets/
 web/.venv/
