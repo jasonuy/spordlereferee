@@ -3,56 +3,193 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>PCAHA Schedule</title>
+    <title>PCAHA Schedule &amp; Stats</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <header class="top">
       <div>
         <p class="kicker">Pacific Coast Amateur Hockey Association</p>
-        <h1>Schedule</h1>
+        <h1 id="page-title">Schedule</h1>
       </div>
-      <a class="source" href="https://games.pcaha.ca" target="_blank" rel="noreferrer">games.pcaha.ca</a>
+      <div class="top-right">
+        <nav class="main-nav" aria-label="Primary">
+          <a href="#/schedule" data-nav="schedule" class="tab">Schedule</a>
+          <a href="#/standings" data-nav="standings" class="tab">Standings</a>
+        </nav>
+        <a class="source" href="https://games.pcaha.ca" target="_blank" rel="noreferrer">games.pcaha.ca</a>
+      </div>
     </header>
 
-    <form id="filters" class="filters">
-      <label>
-        Date
-        <input type="date" name="day" />
-      </label>
-      <label>
-        Season
-        <select name="season_id"></select>
-      </label>
-      <label>
-        Association
-        <select name="office_id"><option value="">All associations</option></select>
-      </label>
-      <label>
-        Division
-        <select name="division"><option value="">All divisions</option></select>
-      </label>
-      <label>
-        Gender
-        <select name="gender"><option value="">All genders</option></select>
-      </label>
-      <label>
-        Type
-        <select name="type"><option value="">All types</option></select>
-      </label>
-      <label>
-        Schedule
-        <select name="schedule_id"><option value="">All schedules</option></select>
-      </label>
-      <label>
-        Group
-        <select name="group_id"><option value="">All groups</option></select>
-      </label>
-    </form>
+    <section id="view-schedule" class="view">
+      <form id="filters" class="filters">
+        <label>
+          Date
+          <input type="date" name="day" />
+        </label>
+        <label>
+          Season
+          <select name="season_id"></select>
+        </label>
+        <label>
+          Association
+          <select name="office_id"><option value="">All associations</option></select>
+        </label>
+        <label>
+          Division
+          <select name="division"><option value="">All divisions</option></select>
+        </label>
+        <label>
+          Gender
+          <select name="gender"><option value="">All genders</option></select>
+        </label>
+        <label>
+          Type
+          <select name="type"><option value="">All types</option></select>
+        </label>
+        <label>
+          Schedule
+          <select name="schedule_id"><option value="">All schedules</option></select>
+        </label>
+        <label>
+          Group
+          <select name="group_id"><option value="">All groups</option></select>
+        </label>
+      </form>
+      <p id="status" class="status">Loading filters…</p>
+      <div id="games" class="games"></div>
+      <nav id="pager" class="pager" hidden></nav>
+    </section>
 
-    <p id="status" class="status">Loading filters…</p>
-    <div id="games" class="games"></div>
-    <nav id="pager" class="pager" hidden></nav>
+    <section id="view-standings" class="view" hidden>
+      <nav class="sub-nav" aria-label="Standings sections">
+        <a href="#/standings" data-subnav="standings">League table</a>
+        <a href="#/leaders" data-subnav="leaders">Leaders</a>
+        <a href="#/search" data-subnav="search">Search</a>
+      </nav>
+      <form id="standings-filters" class="filters">
+        <label>
+          Season
+          <select name="season_id"></select>
+        </label>
+        <label>
+          Age / Division
+          <select name="division"><option value="">All ages</option></select>
+        </label>
+        <label>
+          Type
+          <select name="type"><option value="">All types</option></select>
+        </label>
+        <label>
+          Schedule
+          <select name="schedule_id"><option value="">Select a schedule</option></select>
+        </label>
+        <label>
+          Group
+          <select name="group_id"><option value="">All groups</option></select>
+        </label>
+      </form>
+      <p id="standings-status" class="status">Pick a schedule to load standings.</p>
+      <div id="standings-table" class="table-wrap"></div>
+    </section>
+
+    <section id="view-team" class="view" hidden>
+      <nav class="sub-nav" aria-label="Standings sections">
+        <a href="#/standings" data-subnav="standings">League table</a>
+        <a href="#/leaders" data-subnav="leaders">Leaders</a>
+        <a href="#/search" data-subnav="search">Search</a>
+      </nav>
+      <p id="team-status" class="status">Loading team…</p>
+      <div id="team-header" class="detail-header"></div>
+      <h2 class="section-title">Skaters</h2>
+      <div id="team-skaters" class="table-wrap"></div>
+      <h2 class="section-title">Goalies</h2>
+      <div id="team-goalies" class="table-wrap"></div>
+      <h2 class="section-title">Recent games</h2>
+      <div id="team-games" class="games"></div>
+    </section>
+
+    <section id="view-leaders" class="view" hidden>
+      <nav class="sub-nav" aria-label="Standings sections">
+        <a href="#/standings" data-subnav="standings">League table</a>
+        <a href="#/leaders" data-subnav="leaders" class="active">Leaders</a>
+        <a href="#/search" data-subnav="search">Search</a>
+      </nav>
+      <form id="leaders-filters" class="filters">
+        <label>
+          Season
+          <select name="season_id"></select>
+        </label>
+        <label>
+          Age / Division
+          <select name="division"><option value="">All ages</option></select>
+        </label>
+        <label>
+          Schedule
+          <select name="schedule_id"><option value="">All schedules with stats</option></select>
+        </label>
+      </form>
+      <p id="leaders-status" class="status">Loading leaders…</p>
+      <div id="leaders" class="leaders-grid"></div>
+    </section>
+
+    <section id="view-player" class="view" hidden>
+      <nav class="sub-nav" aria-label="Standings sections">
+        <a href="#/standings" data-subnav="standings">League table</a>
+        <a href="#/leaders" data-subnav="leaders">Leaders</a>
+        <a href="#/search" data-subnav="search">Search</a>
+      </nav>
+      <p id="player-status" class="status">Loading player…</p>
+      <div id="player-header" class="detail-header"></div>
+      <div id="player-splits" class="splits"></div>
+      <h2 class="section-title">Season totals</h2>
+      <div id="player-stats" class="table-wrap"></div>
+      <h2 class="section-title">Game log</h2>
+      <div id="player-log" class="table-wrap"></div>
+    </section>
+
+    <section id="view-search" class="view" hidden>
+      <nav class="sub-nav" aria-label="Standings sections">
+        <a href="#/standings" data-subnav="standings">League table</a>
+        <a href="#/leaders" data-subnav="leaders">Leaders</a>
+        <a href="#/search" data-subnav="search" class="active">Search</a>
+      </nav>
+      <form id="search-form" class="filters search-form">
+        <label class="grow">
+          Search players or teams
+          <input type="search" name="q" placeholder="Name…" autocomplete="off" />
+        </label>
+        <label>
+          Season
+          <select name="season_id"></select>
+        </label>
+        <button type="submit" class="btn">Search</button>
+      </form>
+      <p id="search-status" class="status">Type at least 2 characters.</p>
+      <div id="search-results" class="search-results"></div>
+    </section>
+
+    <section id="view-game" class="view" hidden>
+      <nav class="sub-nav" aria-label="Standings sections">
+        <a href="#/standings" data-subnav="standings">League table</a>
+        <a href="#/leaders" data-subnav="leaders">Leaders</a>
+        <a href="#/search" data-subnav="search">Search</a>
+      </nav>
+      <p id="game-status" class="status">Loading recap…</p>
+      <div id="game-header" class="detail-header"></div>
+      <h2 class="section-title">Scoring</h2>
+      <div id="game-goals" class="table-wrap"></div>
+      <h2 class="section-title">Penalties</h2>
+      <div id="game-penalties" class="table-wrap"></div>
+      <h2 class="section-title">Lineups</h2>
+      <div id="game-lineups" class="lineups-grid"></div>
+    </section>
 
     <script src="/static/app.js"></script>
   </body>

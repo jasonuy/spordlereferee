@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Studio LaunchAgent for the PCAHA schedule + standings web UI.
+
+  IMPORTANT: Keep this on INTERNAL disk (~/pcaha-schedule).
+  LaunchAgents cannot run scripts from /Volumes/External Drive
+  (~/projects is often a symlink to that volume).
+
+  Listens on 0.0.0.0:8765 (http://192.168.5.156:8765 on LAN).
+-->
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.jasonuy.pcaha-schedule</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/bash</string>
+      <string>/Users/jasonbot/pcaha-schedule/deploy/pcaha-web.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/jasonbot/pcaha-schedule/web</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/jasonbot/Library/Logs/pcaha-schedule.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jasonbot/Library/Logs/pcaha-schedule.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PCAHA_ROOT</key>
+      <string>/Users/jasonbot/pcaha-schedule</string>
+      <key>PCAHA_DB</key>
+      <string>/Users/jasonbot/pcaha-schedule/data/pcaha.db</string>
+      <key>PCAHA_SCORESHEET_CACHE</key>
+      <string>/Users/jasonbot/pcaha-schedule/data/scoresheets</string>
+      <key>PCAHA_HOST</key>
+      <string>0.0.0.0</string>
+      <key>PCAHA_PORT</key>
+      <string>8765</string>
+      <key>PATH</key>
+      <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    </dict>
+  </dict>
+</plist>

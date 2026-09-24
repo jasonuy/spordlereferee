@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Studio LaunchAgent for nightly PCAHA scoresheet ingest.
+
+  Keep on INTERNAL disk (~/pcaha-schedule) — LaunchAgents cannot use
+  /Volumes/External Drive.
+-->
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.jasonuy.pcaha-ingest</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/bash</string>
+      <string>/Users/jasonbot/pcaha-schedule/deploy/pcaha-ingest.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/jasonbot/pcaha-schedule/web</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+      <key>Hour</key>
+      <integer>2</integer>
+      <key>Minute</key>
+      <integer>15</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/jasonbot/Library/Logs/pcaha-ingest.launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jasonbot/Library/Logs/pcaha-ingest.launchd.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PCAHA_ROOT</key>
+      <string>/Users/jasonbot/pcaha-schedule</string>
+      <key>PCAHA_DB</key>
+      <string>/Users/jasonbot/pcaha-schedule/data/pcaha.db</string>
+      <key>PCAHA_SCORESHEET_CACHE</key>
+      <string>/Users/jasonbot/pcaha-schedule/data/scoresheets</string>
+      <key>PCAHA_SEASON</key>
+      <string>2026-27</string>
+      <key>PATH</key>
+      <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+  </dict>
+</plist>
