@@ -369,15 +369,57 @@ async function loadGames() {
   }
 }
 
-async function loadStandingsSchedules() {
+async function loadStandingsSchedules({ preserveSchedule = true } = {}) {
   const season = standingsForm.elements.season_id.value;
-  standingsSchedulesCache = await getJson(`/api/standings/schedules?season_id=${encodeURIComponent(season)}`);
-  fillSelect(standingsForm.elements.schedule_id, standingsSchedulesCache, {
-    blank: "Select a schedule",
-    value: (s) => s.id,
-    label: (s) => `${s.division || ""} ${s.type ? `· ${s.type}` : ""} · ${s.name}`.trim(),
+  const division = standingsForm.elements.division?.value || "";
+  const type = standingsForm.elements.type?.value || "";
+  const prevSchedule = preserveSchedule ? standingsForm.elements.schedule_id.value : "";
+  const prevGroup = preserveSchedule ? standingsForm.elements.group_id.value : "";
+  const data = await getJson(
+    `/api/standings/schedules?${query({
+      season_id: season,
+      division,
+      type,
+    })}`,
+  );
+  const divisions = data.divisions || [];
+  const types = data.types || [];
+  fillSelect(standingsForm.elements.division, divisions, {
+    blank: "All ages",
+    value: (d) => d,
+    label: (d) => d,
   });
+  if (division && divisions.includes(division)) {
+    standingsForm.elements.division.value = division;
+  }
+  fillSelect(standingsForm.elements.type, types, {
+    blank: "All types",
+    value: (t) => t,
+    label: (t) => t,
+  });
+  if (type && types.includes(type)) {
+    standingsForm.elements.type.value = type;
+  }
+
+  standingsSchedulesCache = data.schedules || [];
+  fillSelect(standingsForm.elements.schedule_id, standingsSchedulesCache, {
+    blank: standingsSchedulesCache.length ? "Select a schedule" : "No schedules match",
+    value: (s) => s.id,
+    label: (s) => {
+      const cat = s.category ? String(s.category) : "";
+      const bits = [s.division, s.type, cat && cat !== s.name ? cat : null, s.name].filter(Boolean);
+      return bits.join(" · ");
+    },
+  });
+  if (prevSchedule && [...standingsForm.elements.schedule_id.options].some((o) => o.value === prevSchedule)) {
+    standingsForm.elements.schedule_id.value = prevSchedule;
+  } else {
+    standingsForm.elements.schedule_id.value = "";
+  }
   updateStandingsGroups();
+  if (prevGroup && [...standingsForm.elements.group_id.options].some((o) => o.value === prevGroup)) {
+    standingsForm.elements.group_id.value = prevGroup;
+  }
 }
 
 function updateStandingsGroups() {
@@ -571,8 +613,17 @@ async function loadTeam(teamId, params) {
 
 async function loadLeadersSchedules() {
   const season = leadersForm.elements.season_id.value;
-  const rows = await getJson(`/api/standings/schedules?season_id=${encodeURIComponent(season)}`);
-  fillSelect(leadersForm.elements.schedule_id, rows, {
+  const division = leadersForm.elements.division?.value || "";
+  const data = await getJson(
+    `/api/standings/schedules?${query({ season_id: season, division })}`,
+  );
+  fillSelect(leadersForm.elements.division, data.divisions || [], {
+    blank: "All ages",
+    value: (d) => d,
+    label: (d) => d,
+  });
+  if (division) leadersForm.elements.division.value = division;
+  fillSelect(leadersForm.elements.schedule_id, data.schedules || [], {
     blank: "All schedules with stats",
     value: (s) => s.id,
     label: (s) => `${s.division || ""} ${s.type ? `· ${s.type}` : ""} · ${s.name}`.trim(),
@@ -872,13 +923,15 @@ async function route() {
 
   if (view === "standings") {
     showView("standings", "Standings");
+    if (params.season_id) standingsForm.elements.season_id.value = params.season_id;
+    if (params.division) standingsForm.elements.division.value = params.division;
+    if (params.type) standingsForm.elements.type.value = params.type;
     await loadStandingsSchedules();
     if (params.schedule_id) {
       standingsForm.elements.schedule_id.value = params.schedule_id;
       updateStandingsGroups();
       if (params.group_id) standingsForm.elements.group_id.value = params.group_id;
     }
-    if (params.season_id) standingsForm.elements.season_id.value = params.season_id;
     await loadStandings();
     return;
   }
@@ -889,6 +942,7 @@ async function route() {
   if (view === "leaders") {
     showView("leaders", "Leaders");
     if (params.season_id) leadersForm.elements.season_id.value = params.season_id;
+    if (params.division) leadersForm.elements.division.value = params.division;
     await loadLeadersSchedules();
     if (params.schedule_id) leadersForm.elements.schedule_id.value = params.schedule_id;
     await loadLeaders();
@@ -931,22 +985,26 @@ pagerEl.addEventListener("click", async (event) => {
 });
 
 standingsForm.addEventListener("change", async (event) => {
-  if (event.target.name === "season_id") {
-    await loadStandingsSchedules();
-  } else if (event.target.name === "schedule_id") {
+  const name = event.target.name;
+  if (["season_id", "division", "type"].includes(name)) {
+    await loadStandingsSchedules({ preserveSchedule: name !== "season_id" });
+  } else if (name === "schedule_id") {
     updateStandingsGroups();
   }
   setHash("standings", {
     season_id: standingsForm.elements.season_id.value,
+    division: standingsForm.elements.division.value,
+    type: standingsForm.elements.type.value,
     schedule_id: standingsForm.elements.schedule_id.value,
     group_id: standingsForm.elements.group_id.value,
   });
 });
 
 leadersForm.addEventListener("change", async (event) => {
-  if (event.target.name === "season_id") await loadLeadersSchedules();
+  if (["season_id", "division"].includes(event.target.name)) await loadLeadersSchedules();
   setHash("leaders", {
     season_id: leadersForm.elements.season_id.value,
+    division: leadersForm.elements.division.value,
     schedule_id: leadersForm.elements.schedule_id.value,
   });
 });

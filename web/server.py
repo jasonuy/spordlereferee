@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import sys
 from datetime import date, datetime
@@ -857,12 +858,16 @@ def game_recap(game_id: int) -> dict:
 
 
 @app.get("/api/standings/schedules")
-def standings_schedules(season_id: str = Query("2026-27")) -> list:
+def standings_schedules(
+    season_id: str = Query("2026-27"),
+    division: Optional[str] = None,
+    type: Optional[str] = None,
+    gender: Optional[str] = None,
+) -> dict:
     """Schedules that have standings rows (for the league picker)."""
     conn = db()
     try:
-        rows = conn.execute(
-            """
+        sql = """
             SELECT DISTINCT s.id, s.name, s.type, s.division, s.gender, s.category, s.office_id AS officeId,
                    st.group_id,
                    gr.name AS group_name
@@ -870,14 +875,31 @@ def standings_schedules(season_id: str = Query("2026-27")) -> list:
             JOIN schedules s ON s.id = st.schedule_id
             LEFT JOIN groups gr ON gr.id = st.group_id
             WHERE st.season_id=?
-            ORDER BY s.division ASC, s.type ASC, s.name ASC, gr.name ASC
-            """,
-            (season_id,),
-        ).fetchall()
-        # Collapse to schedule list with nested groups
+        """
+        params: list[Any] = [season_id]
+        if division:
+            sql += " AND s.division = ?"
+            params.append(division)
+        if type:
+            sql += " AND s.type = ?"
+            params.append(type)
+        if gender:
+            sql += " AND s.gender = ?"
+            params.append(gender)
+        sql += " ORDER BY s.division ASC, s.type ASC, s.name ASC, gr.name ASC"
+        rows = conn.execute(sql, params).fetchall()
         by_id: dict[int, dict] = {}
+        divisions = set()
+        types = set()
+        genders = set()
         for r in rows:
             sid = r["id"]
+            if r["division"]:
+                divisions.add(r["division"])
+            if r["type"]:
+                types.add(r["type"])
+            if r["gender"]:
+                genders.add(r["gender"])
             if sid not in by_id:
                 by_id[sid] = {
                     "id": sid,
@@ -892,13 +914,45 @@ def standings_schedules(season_id: str = Query("2026-27")) -> list:
             gid = r["group_id"]
             if gid and not any(g["id"] == gid for g in by_id[sid]["groups"]):
                 by_id[sid]["groups"].append({"id": gid, "name": r["group_name"] or str(gid)})
-        return list(by_id.values())
+
+        # Facets from all standings schedules this season (unfiltered), for the dropdowns
+        facet_rows = conn.execute(
+            """
+            SELECT DISTINCT s.division, s.type, s.gender
+            FROM standings st
+            JOIN schedules s ON s.id = st.schedule_id
+            WHERE st.season_id=?
+            """,
+            (season_id,),
+        ).fetchall()
+        all_divisions = sorted({r["division"] for r in facet_rows if r["division"]}, key=_division_sort_key)
+        all_types = sorted({r["type"] for r in facet_rows if r["type"]})
+        all_genders = sorted({r["gender"] for r in facet_rows if r["gender"]})
+
+        return {
+            "seasonId": season_id,
+            "division": division,
+            "type": type,
+            "gender": gender,
+            "divisions": all_divisions,
+            "types": all_types,
+            "genders": all_genders,
+            "schedules": list(by_id.values()),
+        }
     finally:
         conn.close()
 
 
+def _division_sort_key(name: str) -> tuple:
+    """Sort U7…U21 numerically, then Other / unknown last."""
+    m = re.match(r"^U(\d+)", str(name).upper())
+    if m:
+        return (0, int(m.group(1)), name)
+    return (1, 99, name)
+
+
 if __name__ == "__main__":
-        uvicorn.run(
+    uvicorn.run(
         app,
         host=os.environ.get("PCAHA_HOST", "0.0.0.0"),
         port=int(os.environ.get("PCAHA_PORT", "8765")),
