@@ -22,7 +22,7 @@ body {
     radial-gradient(1200px 400px at 10% -10%, #dfe8f7 0%, transparent 60%),
     radial-gradient(900px 320px at 100% 0%, #f3d6dc 0%, transparent 55%),
     var(--paper);
-  font: 16px/1.45 "Titillium Web", "Segoe UI", sans-serif;
+  font: 16px/1.45 "Titillium Web", "Trebuchet MS", "Segoe UI", sans-serif;
 }
 
 .top {
