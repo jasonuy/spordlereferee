@@ -655,52 +655,48 @@ async function loadTeam(teamId, params) {
     `;
 
     const season = data.seasonId;
-    sortableTable(
-      document.getElementById("team-skaters"),
-      [
-        { key: "number", label: "#", render: (r) => escapeHtml(r.number_display || r.number || "—") },
-        {
-          key: "player_name",
-          label: "Name",
-          render: (r) =>
-            `<a href="#/player/${r.participant_id}?season_id=${encodeURIComponent(season)}&schedule_id=${r.schedule_id}">${escapeHtml(titleCase(r.player_name))}</a>${
-              r.is_affiliate ? ' <span class="tag">AP</span>' : ""
-            }`,
-        },
-        { key: "positions", label: "Pos" },
-        { key: "gp", label: "GP", numeric: true },
-        { key: "g", label: "G", numeric: true },
-        { key: "a", label: "A", numeric: true },
-        { key: "p", label: "P", numeric: true },
-        { key: "pim", label: "PIM", numeric: true },
-        { key: "ppg", label: "PPG", numeric: true },
-        { key: "shg", label: "SHG", numeric: true },
-        { key: "gwg", label: "GWG", numeric: true },
-      ],
-      data.skaters,
-    );
-    sortState.get(document.getElementById("team-skaters")).key = "p";
-    sortState.get(document.getElementById("team-skaters")).dir = "desc";
+    const skatersEl = document.getElementById("team-skaters");
+    const skaterCols = [
+      { key: "number", label: "#", render: (r) => escapeHtml(r.number_display || r.number || "—") },
+      {
+        key: "player_name",
+        label: "Name",
+        render: (r) =>
+          `<a href="#/player/${r.participant_id}?season_id=${encodeURIComponent(season)}&schedule_id=${r.schedule_id}">${escapeHtml(titleCase(r.player_name))}</a>${
+            r.is_affiliate ? ' <span class="tag">AP</span>' : ""
+          }`,
+      },
+      { key: "positions", label: "Pos" },
+      { key: "gp", label: "GP", numeric: true },
+      { key: "g", label: "G", numeric: true },
+      { key: "a", label: "A", numeric: true },
+      { key: "p", label: "P", numeric: true },
+      { key: "pim", label: "PIM", numeric: true },
+      { key: "ppg", label: "PPG", numeric: true },
+      { key: "shg", label: "SHG", numeric: true },
+      { key: "gwg", label: "GWG", numeric: true },
+    ];
+    sortState.set(skatersEl, { key: "p", dir: "desc" });
+    sortableTable(skatersEl, skaterCols, data.skaters);
 
-    sortableTable(
-      document.getElementById("team-goalies"),
-      [
-        { key: "number", label: "#", render: (r) => escapeHtml(r.number_display || r.number || "—") },
-        {
-          key: "player_name",
-          label: "Name",
-          render: (r) =>
-            `<a href="#/player/${r.participant_id}?season_id=${encodeURIComponent(season)}">${escapeHtml(titleCase(r.player_name))}</a>`,
-        },
-        { key: "goalie_gp", label: "GP", numeric: true },
-        { key: "goalie_w", label: "W", numeric: true },
-        { key: "goalie_l", label: "L", numeric: true },
-        { key: "goalie_t", label: "T", numeric: true },
-        { key: "ga", label: "GA", numeric: true },
-        { key: "gaa", label: "GAA", numeric: true },
-      ],
-      data.goalies,
-    );
+    const goaliesEl = document.getElementById("team-goalies");
+    const goalieCols = [
+      { key: "number", label: "#", render: (r) => escapeHtml(r.number_display || r.number || "—") },
+      {
+        key: "player_name",
+        label: "Name",
+        render: (r) =>
+          `<a href="#/player/${r.participant_id}?season_id=${encodeURIComponent(season)}">${escapeHtml(titleCase(r.player_name))}</a>`,
+      },
+      { key: "goalie_gp", label: "GP", numeric: true },
+      { key: "goalie_w", label: "W", numeric: true },
+      { key: "goalie_l", label: "L", numeric: true },
+      { key: "goalie_t", label: "T", numeric: true },
+      { key: "ga", label: "GA", numeric: true },
+      { key: "gaa", label: "GAA", numeric: true },
+    ];
+    sortState.set(goaliesEl, { key: "goalie_w", dir: "desc" });
+    sortableTable(goaliesEl, goalieCols, data.goalies);
 
     document.getElementById("team-games").innerHTML = data.games
       .map((g) => {
