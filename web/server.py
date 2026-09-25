@@ -228,6 +228,168 @@ def _is_staff_positions(positions: str | None) -> bool:
     return all(p in staff or "coach" in p or "manager" in p or "trainer" in p for p in parts)
 
 
+def _normalize_player_name(name: Optional[str]) -> str:
+    return " ".join(str(name or "").upper().split())
+
+
+_PLAYER_STAT_SUM_FIELDS = (
+    "gp",
+    "g",
+    "a",
+    "p",
+    "pim",
+    "ppg",
+    "shg",
+    "gwg",
+    "affiliate_gp",
+    "goalie_gp",
+    "goalie_w",
+    "goalie_l",
+    "goalie_t",
+    "ga",
+)
+
+
+def _participant_ids_share_a_game(
+    conn: sqlite3.Connection,
+    *,
+    team_id: int,
+    season_id: str,
+    schedule_id: Optional[int],
+    participant_ids: list[int],
+) -> bool:
+    """True if two+ of these participants appear in the same game for the team."""
+    if len(participant_ids) < 2:
+        return False
+    placeholders = ",".join("?" * len(participant_ids))
+    sql = f"""
+        SELECT le.game_id
+        FROM lineup_entries le
+        JOIN games g ON g.id = le.game_id
+        WHERE le.team_id = ?
+          AND g.season_id = ?
+          AND g.is_approved = 1
+          AND le.participant_id IN ({placeholders})
+    """
+    params: list[Any] = [team_id, season_id, *participant_ids]
+    if schedule_id is not None:
+        sql += " AND g.schedule_id = ?"
+        params.append(schedule_id)
+    sql += " GROUP BY le.game_id HAVING COUNT(DISTINCT le.participant_id) > 1 LIMIT 1"
+    return conn.execute(sql, params).fetchone() is not None
+
+
+def merge_duplicate_name_players(
+    conn: sqlite3.Connection,
+    players: list[dict],
+    *,
+    season_id: str,
+    schedule_id: Optional[int] = None,
+) -> list[dict]:
+    """Combine same-name teammates split across Spordle IDs / jersey numbers.
+
+    Spordle sometimes issues a second participant id when a player shows up in a
+    different sweater. Merge those rows when the ids never share a game (so two
+    kids with the same name on one roster stay separate).
+    """
+    from collections import defaultdict
+
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for row in players:
+        key = (
+            row.get("team_id"),
+            row.get("schedule_id"),
+            _normalize_player_name(row.get("player_name")),
+            int(row.get("is_goalie") or 0),
+        )
+        groups[key].append(row)
+
+    merged: list[dict] = []
+    for (team_id, sched_id, name, _goalie), rows in groups.items():
+        if len(rows) == 1 or not team_id or not name:
+            merged.extend(rows)
+            continue
+
+        pids = [int(r["participant_id"]) for r in rows if r.get("participant_id") is not None]
+        sid = schedule_id if schedule_id is not None else sched_id
+        if _participant_ids_share_a_game(
+            conn,
+            team_id=int(team_id),
+            season_id=season_id,
+            schedule_id=int(sid) if sid is not None else None,
+            participant_ids=pids,
+        ):
+            merged.extend(rows)
+            continue
+
+        primary = max(rows, key=lambda r: (r.get("gp") or 0, r.get("p") or 0, r.get("g") or 0))
+        out = dict(primary)
+        for field in _PLAYER_STAT_SUM_FIELDS:
+            out[field] = sum((r.get(field) or 0) for r in rows)
+
+        placeholders = ",".join("?" * len(pids))
+        gp_sql = f"""
+            SELECT COUNT(DISTINCT le.game_id)
+            FROM lineup_entries le
+            JOIN games g ON g.id = le.game_id
+            WHERE le.team_id = ? AND g.season_id = ? AND g.is_approved = 1
+              AND le.participant_id IN ({placeholders})
+        """
+        gp_params: list[Any] = [int(team_id), season_id, *pids]
+        if sid is not None:
+            gp_sql += " AND g.schedule_id = ?"
+            gp_params.append(int(sid))
+        out["gp"] = int(conn.execute(gp_sql, gp_params).fetchone()[0] or out["gp"])
+
+        numbers_sql = f"""
+            SELECT DISTINCT le.number
+            FROM lineup_entries le
+            JOIN games g ON g.id = le.game_id
+            WHERE le.team_id = ? AND g.season_id = ? AND g.is_approved = 1
+              AND le.participant_id IN ({placeholders})
+              AND le.number IS NOT NULL
+        """
+        num_params: list[Any] = [int(team_id), season_id, *pids]
+        if sid is not None:
+            numbers_sql += " AND g.schedule_id = ?"
+            num_params.append(int(sid))
+        numbers_sql += " ORDER BY le.number ASC"
+        nums = [r[0] for r in conn.execute(numbers_sql, num_params).fetchall()]
+        if not nums:
+            nums = sorted({r.get("number") for r in rows if r.get("number") is not None})
+        out["number"] = nums[0] if len(nums) == 1 else None
+        out["numbers"] = nums
+        out["number_display"] = "/".join(str(n) for n in nums) if nums else ""
+
+        pos_parts: list[str] = []
+        seen_pos: set[str] = set()
+        for r in rows:
+            for part in str(r.get("positions") or "").split(","):
+                piece = part.strip()
+                key = piece.upper()
+                if piece and key not in seen_pos:
+                    seen_pos.add(key)
+                    pos_parts.append(piece)
+        if pos_parts:
+            out["positions"] = ",".join(pos_parts)
+        out["merged_participant_ids"] = pids
+        out["is_affiliate"] = 1 if any(r.get("is_affiliate") for r in rows) else 0
+        out["p"] = int(out.get("g") or 0) + int(out.get("a") or 0)
+        if out.get("is_goalie") and out.get("goalie_gp"):
+            out["gaa"] = round(float(out.get("ga") or 0) / float(out["goalie_gp"]), 2)
+        merged.append(out)
+
+    merged.sort(
+        key=lambda r: (
+            int(r.get("is_goalie") or 0),
+            -(r.get("p") or 0),
+            -(r.get("g") or 0),
+            str(r.get("player_name") or ""),
+        )
+    )
+    return merged
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC / "index.html")
@@ -496,6 +658,9 @@ def team_roster(
             params.append(schedule_id)
         sql += " ORDER BY is_goalie ASC, p DESC, g DESC, player_name ASC"
         players = rows_to_dicts(conn.execute(sql, params).fetchall())
+        players = merge_duplicate_name_players(
+            conn, players, season_id=season_id, schedule_id=schedule_id
+        )
 
         skaters = [
             p
@@ -582,6 +747,8 @@ def leaders(
 
         def top(metric: str, goalie: bool = False, extra: str = "") -> list:
             gfilter = "ps.is_goalie=1" if goalie else "ps.is_goalie=0"
+            # Fetch a wider pool so same-name merges can still fill the board.
+            fetch_n = min(max(limit * 3, limit), 200)
             q = f"""
                 SELECT ps.*, t.name AS team_name, s.name AS schedule_name, s.type AS schedule_type
                 FROM player_stats ps
@@ -591,7 +758,21 @@ def leaders(
                 ORDER BY {metric} DESC, ps.player_name ASC
                 LIMIT ?
             """
-            return rows_to_dicts(conn.execute(q, [*params, limit]).fetchall())
+            rows = rows_to_dicts(conn.execute(q, [*params, fetch_n]).fetchall())
+            rows = merge_duplicate_name_players(
+                conn, rows, season_id=season_id, schedule_id=schedule_id
+            )
+            reverse = not metric.endswith("gaa")
+            rows.sort(
+                key=lambda r: (
+                    r.get(metric.split(".")[-1]) is None,
+                    -(r.get(metric.split(".")[-1]) or 0)
+                    if reverse
+                    else (r.get(metric.split(".")[-1]) or 0),
+                    str(r.get("player_name") or ""),
+                )
+            )
+            return rows[:limit]
 
         return {
             "seasonId": season_id,
@@ -602,20 +783,7 @@ def leaders(
             "assists": top("ps.a"),
             "pim": top("ps.pim"),
             "goalies": top("ps.goalie_w", goalie=True, extra="AND ps.goalie_gp > 0"),
-            "gaa": rows_to_dicts(
-                conn.execute(
-                    f"""
-                    SELECT ps.*, t.name AS team_name, s.name AS schedule_name, s.type AS schedule_type
-                    FROM player_stats ps
-                    LEFT JOIN teams t ON t.id = ps.team_id
-                    LEFT JOIN schedules s ON s.id = ps.schedule_id
-                    WHERE {where_sql} AND ps.is_goalie=1 AND ps.goalie_gp >= 2 AND ps.gaa IS NOT NULL
-                    ORDER BY ps.gaa ASC, ps.goalie_gp DESC
-                    LIMIT ?
-                    """,
-                    [*params, limit],
-                ).fetchall()
-            ),
+            "gaa": top("ps.gaa", goalie=True, extra="AND ps.goalie_gp >= 2 AND ps.gaa IS NOT NULL"),
         }
     finally:
         conn.close()

@@ -628,7 +628,7 @@ async function loadTeam(teamId, params) {
     sortableTable(
       document.getElementById("team-skaters"),
       [
-        { key: "number", label: "#", numeric: true },
+        { key: "number", label: "#", render: (r) => escapeHtml(r.number_display || r.number || "—") },
         {
           key: "player_name",
           label: "Name",
@@ -655,7 +655,7 @@ async function loadTeam(teamId, params) {
     sortableTable(
       document.getElementById("team-goalies"),
       [
-        { key: "number", label: "#", numeric: true },
+        { key: "number", label: "#", render: (r) => escapeHtml(r.number_display || r.number || "—") },
         {
           key: "player_name",
           label: "Name",
