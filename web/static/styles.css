@@ -131,7 +131,20 @@ h2 {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: -4px 0 16px;
+  margin: 8px 0 0;
+}
+
+.league-picker {
+  margin: 20px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.league-picker summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--navy);
+  padding: 8px 0;
 }
 
 .schedule-list button {

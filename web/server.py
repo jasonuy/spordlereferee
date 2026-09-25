@@ -85,6 +85,17 @@ session.headers.update(
 )
 
 app = FastAPI(title="PCAHA schedule")
+
+
+@app.middleware("http")
+async def no_cache_static(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
+
+
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 

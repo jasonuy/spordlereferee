@@ -33,9 +33,12 @@ let page = 1;
 let loading = false;
 let filterData = null;
 let standingsSchedulesCache = [];
+let suppressStandingsEvents = false;
+let routeSeq = 0;
 const sortState = new WeakMap();
 
 function fillSelect(select, items, { value, label, blank }) {
+  if (!select) return;
   const current = select.value;
   select.innerHTML = "";
   if (blank) {
@@ -395,14 +398,15 @@ function preferredScheduleId(schedules) {
 
 function renderStandingsScheduleList() {
   const list = document.getElementById("standings-schedule-list");
+  const picker = document.getElementById("standings-league-picker");
   if (!list) return;
   const selected = standingsForm.elements.schedule_id.value;
   if (!standingsSchedulesCache.length) {
-    list.hidden = true;
     list.innerHTML = "";
+    if (picker) picker.hidden = true;
     return;
   }
-  list.hidden = false;
+  if (picker) picker.hidden = false;
   list.innerHTML = standingsSchedulesCache
     .map((s) => {
       const active = String(s.id) === String(selected) ? " active" : "";
@@ -425,73 +429,78 @@ async function loadStandingsSchedules({ preserveSchedule = true, autoSelect = tr
   const seasonEl = standingsForm.elements.season_id;
   const divisionEl = standingsForm.elements.division;
   const typeEl = standingsTypeSelect(standingsForm);
-  let season = seasonEl.value;
+  let season = seasonEl?.value || "";
   const division = divisionEl?.value || "";
   const type = typeEl?.value || "";
   const prevSchedule = preserveSchedule ? standingsForm.elements.schedule_id.value : "";
   const prevGroup = preserveSchedule ? standingsForm.elements.group_id.value : "";
-  const data = await getJson(
+
+  // Resolve season against SQLite first so we never recurse on a Spordle-only year.
+  let data = await getJson(
     `/api/standings/schedules?${query({
       season_id: season || undefined,
       division,
       type,
     })}`,
   );
-
   const seasons = data.seasons || [];
-  fillSelect(seasonEl, seasons, { value: (s) => s, label: (s) => s });
-  if (season && seasons.includes(season)) {
-    seasonEl.value = season;
-  } else if (data.defaultSeason && seasons.includes(data.defaultSeason)) {
-    seasonEl.value = data.defaultSeason;
-    season = data.defaultSeason;
-  } else if (seasons.length) {
-    seasonEl.value = seasons[0];
-    season = seasons[0];
+  const resolved =
+    (season && seasons.includes(season) && season) ||
+    data.defaultSeason ||
+    seasons[0] ||
+    "2026-27";
+  if (resolved !== (data.seasonId || "") && !division && !type) {
+    data = await getJson(
+      `/api/standings/schedules?${query({
+        season_id: resolved,
+        division,
+        type,
+      })}`,
+    );
   }
 
-  // If we had to correct the season (e.g. Spordle listed 2024-25 with no stats), reload once.
-  if (season && season !== (data.seasonId || "") && !division && !type) {
-    return loadStandingsSchedules({ preserveSchedule, autoSelect });
-  }
+  suppressStandingsEvents = true;
+  try {
+    fillSelect(seasonEl, data.seasons || seasons, { value: (s) => s, label: (s) => s });
+    if (seasonEl) seasonEl.value = resolved;
 
-  const divisions = data.divisions || [];
-  const types = data.types || [];
-  fillSelect(divisionEl, divisions, {
-    blank: "All ages",
-    value: (d) => d,
-    label: (d) => d,
-  });
-  if (division && divisions.includes(division)) {
-    divisionEl.value = division;
-  }
-  fillSelect(typeEl, types, {
-    blank: "All types",
-    value: (t) => t,
-    label: (t) => t,
-  });
-  if (type && types.includes(type)) {
-    typeEl.value = type;
-  }
+    fillSelect(divisionEl, data.divisions || [], {
+      blank: "All ages",
+      value: (d) => d,
+      label: (d) => d,
+    });
+    if (division && (data.divisions || []).includes(division) && divisionEl) {
+      divisionEl.value = division;
+    }
+    fillSelect(typeEl, data.types || [], {
+      blank: "All types",
+      value: (t) => t,
+      label: (t) => t,
+    });
+    if (type && (data.types || []).includes(type) && typeEl) {
+      typeEl.value = type;
+    }
 
-  standingsSchedulesCache = data.schedules || [];
-  fillSelect(standingsForm.elements.schedule_id, standingsSchedulesCache, {
-    blank: standingsSchedulesCache.length ? "Select a schedule" : "No schedules for this season",
-    value: (s) => s.id,
-    label: (s) => scheduleLabel(s),
-  });
-  if (prevSchedule && [...standingsForm.elements.schedule_id.options].some((o) => o.value === prevSchedule)) {
-    standingsForm.elements.schedule_id.value = prevSchedule;
-  } else if (autoSelect) {
-    standingsForm.elements.schedule_id.value = preferredScheduleId(standingsSchedulesCache);
-  } else {
-    standingsForm.elements.schedule_id.value = "";
+    standingsSchedulesCache = data.schedules || [];
+    fillSelect(standingsForm.elements.schedule_id, standingsSchedulesCache, {
+      blank: standingsSchedulesCache.length ? "Select a schedule" : "No schedules for this season",
+      value: (s) => String(s.id),
+      label: (s) => scheduleLabel(s),
+    });
+    const want =
+      (prevSchedule &&
+        [...standingsForm.elements.schedule_id.options].some((o) => o.value === String(prevSchedule)) &&
+        String(prevSchedule)) ||
+      (autoSelect ? preferredScheduleId(standingsSchedulesCache) : "");
+    standingsForm.elements.schedule_id.value = want;
+    updateStandingsGroups();
+    if (prevGroup && [...standingsForm.elements.group_id.options].some((o) => o.value === String(prevGroup))) {
+      standingsForm.elements.group_id.value = prevGroup;
+    }
+    renderStandingsScheduleList();
+  } finally {
+    suppressStandingsEvents = false;
   }
-  updateStandingsGroups();
-  if (prevGroup && [...standingsForm.elements.group_id.options].some((o) => o.value === prevGroup)) {
-    standingsForm.elements.group_id.value = prevGroup;
-  }
-  renderStandingsScheduleList();
 }
 
 function updateStandingsGroups() {
@@ -1035,25 +1044,31 @@ async function ensureScheduleFilters() {
 }
 
 async function route() {
+  const seq = ++routeSeq;
   const { parts, params } = parseHash();
   const view = parts[0] || "schedule";
 
   if (view === "standings") {
     showView("standings", "Standings");
+    suppressStandingsEvents = true;
     if (params.season_id) standingsForm.elements.season_id.value = params.season_id;
     if (params.division) standingsForm.elements.division.value = params.division;
     if (params.type) {
       const typeEl = standingsTypeSelect(standingsForm);
       if (typeEl) typeEl.value = params.type;
     }
+    suppressStandingsEvents = false;
     await loadStandingsSchedules({
       preserveSchedule: Boolean(params.schedule_id),
       autoSelect: !params.schedule_id,
     });
+    if (seq !== routeSeq) return;
     if (params.schedule_id) {
-      standingsForm.elements.schedule_id.value = params.schedule_id;
+      suppressStandingsEvents = true;
+      standingsForm.elements.schedule_id.value = String(params.schedule_id);
       updateStandingsGroups();
-      if (params.group_id) standingsForm.elements.group_id.value = params.group_id;
+      if (params.group_id) standingsForm.elements.group_id.value = String(params.group_id);
+      suppressStandingsEvents = false;
       renderStandingsScheduleList();
     }
     await loadStandings();
@@ -1116,6 +1131,7 @@ pagerEl.addEventListener("click", async (event) => {
 });
 
 standingsForm.addEventListener("change", async (event) => {
+  if (suppressStandingsEvents) return;
   const name = event.target.name;
   if (["season_id", "division", "type"].includes(name)) {
     await loadStandingsSchedules({ preserveSchedule: name !== "season_id", autoSelect: true });
