@@ -33,9 +33,11 @@ let page = 1;
 let loading = false;
 let filterData = null;
 let standingsSchedulesCache = [];
+let suppressStandingsEvents = false;
 const sortState = new WeakMap();
 
 function fillSelect(select, items, { value, label, blank }) {
+  if (!select) return;
   const current = select.value;
   select.innerHTML = "";
   if (blank) {
@@ -237,10 +239,9 @@ async function loadFilters() {
     label: (t) => t,
   });
 
-  for (const f of [standingsForm, leadersForm, searchForm]) {
-    fillSelect(f.elements.season_id, seasons, { value: (s) => s, label: (s) => s });
-    f.elements.season_id.value = filterData.defaultSeason;
-  }
+  // Search can browse any Spordle season; standings/leaders seasons come from SQLite.
+  fillSelect(searchForm.elements.season_id, seasons, { value: (s) => s, label: (s) => s });
+  searchForm.elements.season_id.value = filterData.defaultSeason;
 }
 
 async function loadSchedules() {
@@ -369,56 +370,135 @@ async function loadGames() {
   }
 }
 
-async function loadStandingsSchedules({ preserveSchedule = true } = {}) {
-  const season = standingsForm.elements.season_id.value;
-  const division = standingsForm.elements.division?.value || "";
-  const type = standingsForm.elements.type?.value || "";
+function standingsTypeSelect(form) {
+  return form.querySelector('select[name="type"]');
+}
+
+function scheduleLabel(s) {
+  const cat = s.category ? String(s.category) : "";
+  const bits = [s.division, s.type, cat && cat !== s.name ? cat : null, s.name].filter(Boolean);
+  return bits.join(" · ");
+}
+
+function preferredScheduleId(schedules) {
+  if (!schedules.length) return "";
+  const scored = schedules.map((s) => {
+    const name = String(s.name || "").toLowerCase();
+    let score = (s.groups || []).length;
+    if (/u18a/.test(name) && /pre-?season/.test(name)) score += 100;
+    else if (/u18/.test(name) && /pre-?season/.test(name)) score += 80;
+    else if (/pre-?season/.test(name)) score += 20;
+    if (s.division === "U18") score += 10;
+    return { id: s.id, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return String(scored[0].id);
+}
+
+function renderStandingsScheduleList() {
+  const list = document.getElementById("standings-schedule-list");
+  const picker = document.getElementById("standings-league-picker");
+  if (!list) return;
+  const selected = standingsForm.elements.schedule_id.value;
+  if (!standingsSchedulesCache.length) {
+    list.innerHTML = "";
+    if (picker) picker.hidden = true;
+    return;
+  }
+  if (picker) picker.hidden = false;
+  list.innerHTML = standingsSchedulesCache
+    .map((s) => {
+      const active = String(s.id) === String(selected) ? " active" : "";
+      return `<button type="button" data-schedule-id="${escapeHtml(s.id)}" class="${active.trim()}">${escapeHtml(scheduleLabel(s))}</button>`;
+    })
+    .join("");
+}
+
+function standingsHashParams() {
+  return {
+    season_id: standingsForm.elements.season_id.value,
+    division: standingsForm.elements.division.value,
+    type: standingsTypeSelect(standingsForm)?.value || "",
+    schedule_id: standingsForm.elements.schedule_id.value,
+    group_id: standingsForm.elements.group_id.value,
+  };
+}
+
+async function loadStandingsSchedules({ preserveSchedule = true, autoSelect = true } = {}) {
+  const seasonEl = standingsForm.elements.season_id;
+  const divisionEl = standingsForm.elements.division;
+  const typeEl = standingsTypeSelect(standingsForm);
+  let season = seasonEl?.value || "";
+  const division = divisionEl?.value || "";
+  const type = typeEl?.value || "";
   const prevSchedule = preserveSchedule ? standingsForm.elements.schedule_id.value : "";
   const prevGroup = preserveSchedule ? standingsForm.elements.group_id.value : "";
-  const data = await getJson(
+
+  // Resolve season against SQLite first so we never recurse on a Spordle-only year.
+  let data = await getJson(
     `/api/standings/schedules?${query({
-      season_id: season,
+      season_id: season || undefined,
       division,
       type,
     })}`,
   );
-  const divisions = data.divisions || [];
-  const types = data.types || [];
-  fillSelect(standingsForm.elements.division, divisions, {
-    blank: "All ages",
-    value: (d) => d,
-    label: (d) => d,
-  });
-  if (division && divisions.includes(division)) {
-    standingsForm.elements.division.value = division;
-  }
-  fillSelect(standingsForm.elements.type, types, {
-    blank: "All types",
-    value: (t) => t,
-    label: (t) => t,
-  });
-  if (type && types.includes(type)) {
-    standingsForm.elements.type.value = type;
+  const seasons = data.seasons || [];
+  const resolved =
+    (season && seasons.includes(season) && season) ||
+    data.defaultSeason ||
+    seasons[0] ||
+    "2026-27";
+  if (resolved !== (data.seasonId || "") && !division && !type) {
+    data = await getJson(
+      `/api/standings/schedules?${query({
+        season_id: resolved,
+        division,
+        type,
+      })}`,
+    );
   }
 
-  standingsSchedulesCache = data.schedules || [];
-  fillSelect(standingsForm.elements.schedule_id, standingsSchedulesCache, {
-    blank: standingsSchedulesCache.length ? "Select a schedule" : "No schedules match",
-    value: (s) => s.id,
-    label: (s) => {
-      const cat = s.category ? String(s.category) : "";
-      const bits = [s.division, s.type, cat && cat !== s.name ? cat : null, s.name].filter(Boolean);
-      return bits.join(" · ");
-    },
-  });
-  if (prevSchedule && [...standingsForm.elements.schedule_id.options].some((o) => o.value === prevSchedule)) {
-    standingsForm.elements.schedule_id.value = prevSchedule;
-  } else {
-    standingsForm.elements.schedule_id.value = "";
-  }
-  updateStandingsGroups();
-  if (prevGroup && [...standingsForm.elements.group_id.options].some((o) => o.value === prevGroup)) {
-    standingsForm.elements.group_id.value = prevGroup;
+  suppressStandingsEvents = true;
+  try {
+    fillSelect(seasonEl, data.seasons || seasons, { value: (s) => s, label: (s) => s });
+    if (seasonEl) seasonEl.value = resolved;
+
+    fillSelect(divisionEl, data.divisions || [], {
+      blank: "All ages",
+      value: (d) => d,
+      label: (d) => d,
+    });
+    if (division && (data.divisions || []).includes(division) && divisionEl) {
+      divisionEl.value = division;
+    }
+    fillSelect(typeEl, data.types || [], {
+      blank: "All types",
+      value: (t) => t,
+      label: (t) => t,
+    });
+    if (type && (data.types || []).includes(type) && typeEl) {
+      typeEl.value = type;
+    }
+
+    standingsSchedulesCache = data.schedules || [];
+    fillSelect(standingsForm.elements.schedule_id, standingsSchedulesCache, {
+      blank: standingsSchedulesCache.length ? "Select a schedule" : "No schedules for this season",
+      value: (s) => String(s.id),
+      label: (s) => scheduleLabel(s),
+    });
+    const want =
+      (prevSchedule &&
+        [...standingsForm.elements.schedule_id.options].some((o) => o.value === String(prevSchedule)) &&
+        String(prevSchedule)) ||
+      (autoSelect ? preferredScheduleId(standingsSchedulesCache) : "");
+    standingsForm.elements.schedule_id.value = want;
+    updateStandingsGroups();
+    if (prevGroup && [...standingsForm.elements.group_id.options].some((o) => o.value === String(prevGroup))) {
+      standingsForm.elements.group_id.value = prevGroup;
+    }
+    renderStandingsScheduleList();
+  } finally {
+    suppressStandingsEvents = false;
   }
 }
 
@@ -426,8 +506,11 @@ function updateStandingsGroups() {
   const sid = Number(standingsForm.elements.schedule_id.value);
   const sched = standingsSchedulesCache.find((s) => s.id === sid);
   const groups = sched?.groups || [];
+  let blank = "All groups";
+  if (!sid) blank = "Select a schedule first";
+  else if (!groups.length) blank = "No groups";
   fillSelect(standingsForm.elements.group_id, groups, {
-    blank: groups.length ? "All groups" : "No groups",
+    blank,
     value: (g) => g.id,
     label: (g) => g.name,
   });
@@ -438,8 +521,12 @@ async function loadStandings() {
   const table = document.getElementById("standings-table");
   const scheduleId = standingsForm.elements.schedule_id.value;
   if (!scheduleId) {
-    status.textContent = "Pick a schedule to load standings.";
+    const n = standingsSchedulesCache.length;
+    status.textContent = n
+      ? `Pick a schedule below to load standings (${n} available).`
+      : "No standings for this season yet. Run ingest or pick another season.";
     table.innerHTML = "";
+    renderStandingsScheduleList();
     return;
   }
   status.textContent = "Loading standings…";
@@ -612,11 +699,26 @@ async function loadTeam(teamId, params) {
 }
 
 async function loadLeadersSchedules() {
-  const season = leadersForm.elements.season_id.value;
+  const seasonEl = leadersForm.elements.season_id;
+  let season = seasonEl.value;
   const division = leadersForm.elements.division?.value || "";
   const data = await getJson(
-    `/api/standings/schedules?${query({ season_id: season, division })}`,
+    `/api/standings/schedules?${query({ season_id: season || undefined, division })}`,
   );
+  const seasons = data.seasons || [];
+  fillSelect(seasonEl, seasons, { value: (s) => s, label: (s) => s });
+  if (season && seasons.includes(season)) {
+    seasonEl.value = season;
+  } else if (data.defaultSeason && seasons.includes(data.defaultSeason)) {
+    seasonEl.value = data.defaultSeason;
+    season = data.defaultSeason;
+  } else if (seasons.length) {
+    seasonEl.value = seasons[0];
+    season = seasons[0];
+  }
+  if (season && season !== (data.seasonId || "") && !division) {
+    return loadLeadersSchedules();
+  }
   fillSelect(leadersForm.elements.division, data.divisions || [], {
     blank: "All ages",
     value: (d) => d,
@@ -751,6 +853,18 @@ async function loadPlayer(participantId, params) {
 
 async function loadSearch(params = {}) {
   showView("search", "Search");
+  // Prefer SQLite seasons so Search works without Spordle filters.
+  if (!searchForm.elements.season_id.options.length) {
+    try {
+      const meta = await getJson("/api/standings/schedules");
+      const seasons = meta.seasons?.length ? meta.seasons : ["2026-27"];
+      fillSelect(searchForm.elements.season_id, seasons, { value: (s) => s, label: (s) => s });
+      searchForm.elements.season_id.value = meta.defaultSeason || seasons[0];
+    } catch {
+      fillSelect(searchForm.elements.season_id, ["2026-27"], { value: (s) => s, label: (s) => s });
+      searchForm.elements.season_id.value = "2026-27";
+    }
+  }
   if (params.q) searchForm.elements.q.value = params.q;
   if (params.season_id) searchForm.elements.season_id.value = params.season_id;
   const q = searchForm.elements.q.value.trim();
@@ -763,11 +877,11 @@ async function loadSearch(params = {}) {
   }
   status.textContent = "Searching…";
   try {
+    const season = searchForm.elements.season_id.value || "2026-27";
     const data = await getJson(
-      `/api/search?${query({ q, season_id: searchForm.elements.season_id.value })}`,
+      `/api/search?${query({ q, season_id: season })}`,
     );
     status.textContent = `${data.players.length} players · ${data.teams.length} teams`;
-    const season = searchForm.elements.season_id.value;
     root.innerHTML = `
       <div>
         <h2 class="section-title">Players</h2>
@@ -917,20 +1031,50 @@ async function loadGame(gameId) {
   }
 }
 
+function isStandingsFamily(view) {
+  return ["standings", "team", "leaders", "player", "search", "game"].includes(view);
+}
+
+async function ensureScheduleFilters() {
+  if (filterData) return;
+  await loadFilters();
+  await loadSchedules();
+  await loadGroups();
+}
+
 async function route() {
   const { parts, params } = parseHash();
   const view = parts[0] || "schedule";
 
   if (view === "standings") {
     showView("standings", "Standings");
-    if (params.season_id) standingsForm.elements.season_id.value = params.season_id;
-    if (params.division) standingsForm.elements.division.value = params.division;
-    if (params.type) standingsForm.elements.type.value = params.type;
-    await loadStandingsSchedules();
+    const status = document.getElementById("standings-status");
+    if (status) status.textContent = "Loading standings…";
+    suppressStandingsEvents = true;
+    try {
+      if (params.season_id) standingsForm.elements.season_id.value = params.season_id;
+      if (params.division) standingsForm.elements.division.value = params.division;
+      if (params.type) {
+        const typeEl = standingsTypeSelect(standingsForm);
+        if (typeEl) typeEl.value = params.type;
+      }
+    } finally {
+      suppressStandingsEvents = false;
+    }
+    await loadStandingsSchedules({
+      preserveSchedule: Boolean(params.schedule_id),
+      autoSelect: !params.schedule_id,
+    });
     if (params.schedule_id) {
-      standingsForm.elements.schedule_id.value = params.schedule_id;
-      updateStandingsGroups();
-      if (params.group_id) standingsForm.elements.group_id.value = params.group_id;
+      suppressStandingsEvents = true;
+      try {
+        standingsForm.elements.schedule_id.value = String(params.schedule_id);
+        updateStandingsGroups();
+        if (params.group_id) standingsForm.elements.group_id.value = String(params.group_id);
+      } finally {
+        suppressStandingsEvents = false;
+      }
+      renderStandingsScheduleList();
     }
     await loadStandings();
     return;
@@ -962,12 +1106,19 @@ async function route() {
   }
 
   showView("schedule", "Schedule");
+  await ensureScheduleFilters();
   await loadGames();
 }
 
 form.addEventListener("change", async (event) => {
   page = 1;
   const name = event.target.name;
+  try {
+    await ensureScheduleFilters();
+  } catch (err) {
+    statusEl.textContent = `Could not load schedule filters: ${err.message}`;
+    return;
+  }
   if (["season_id", "office_id", "division", "gender", "type"].includes(name)) {
     await loadSchedules();
     await loadGroups();
@@ -985,19 +1136,31 @@ pagerEl.addEventListener("click", async (event) => {
 });
 
 standingsForm.addEventListener("change", async (event) => {
+  if (suppressStandingsEvents) return;
   const name = event.target.name;
   if (["season_id", "division", "type"].includes(name)) {
-    await loadStandingsSchedules({ preserveSchedule: name !== "season_id" });
+    await loadStandingsSchedules({ preserveSchedule: name !== "season_id", autoSelect: true });
   } else if (name === "schedule_id") {
     updateStandingsGroups();
+    renderStandingsScheduleList();
   }
-  setHash("standings", {
-    season_id: standingsForm.elements.season_id.value,
-    division: standingsForm.elements.division.value,
-    type: standingsForm.elements.type.value,
-    schedule_id: standingsForm.elements.schedule_id.value,
-    group_id: standingsForm.elements.group_id.value,
-  });
+  setHash("standings", standingsHashParams());
+});
+
+document.getElementById("standings-schedule-list")?.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-schedule-id]");
+  if (!button) return;
+  const sid = button.dataset.scheduleId;
+  if (![...standingsForm.elements.schedule_id.options].some((o) => o.value === sid)) return;
+  standingsForm.elements.schedule_id.value = sid;
+  updateStandingsGroups();
+  renderStandingsScheduleList();
+  const next = `#/standings?${query(standingsHashParams())}`;
+  if (location.hash === next) {
+    await loadStandings();
+  } else {
+    location.hash = next;
+  }
 });
 
 leadersForm.addEventListener("change", async (event) => {
@@ -1024,12 +1187,19 @@ window.addEventListener("hashchange", () => {
 });
 
 (async function init() {
+  // Standings/leaders/search/team/player/game are SQLite-only — never wait on Spordle.
+  // Schedule tab loads Spordle filters lazily via ensureScheduleFilters().
   try {
-    await loadFilters();
-    await loadSchedules();
-    await loadGroups();
     await route();
   } catch (err) {
-    statusEl.textContent = `Could not load filters: ${err.message}`;
+    console.error(err);
+    const { parts } = parseHash();
+    const view = parts[0] || "schedule";
+    if (isStandingsFamily(view)) {
+      const standingsStatus = document.getElementById("standings-status");
+      if (standingsStatus) standingsStatus.textContent = `Could not load standings: ${err.message}`;
+    } else {
+      statusEl.textContent = `Could not load schedule: ${err.message}`;
+    }
   }
 })();

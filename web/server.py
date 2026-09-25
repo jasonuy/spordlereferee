@@ -85,6 +85,17 @@ session.headers.update(
 )
 
 app = FastAPI(title="PCAHA schedule")
+
+
+@app.middleware("http")
+async def no_cache_static(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
+
+
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -857,6 +868,28 @@ def game_recap(game_id: int) -> dict:
         conn.close()
 
 
+def _age_from_schedule_name(name: Optional[str]) -> Optional[str]:
+    """Pull U11/U13/… from schedule titles when Spordle labels division as Other."""
+    if not name:
+        return None
+    # Match U11, U18A, U11 A, etc. (digit run after U, not requiring a word boundary after).
+    m = re.search(r"(?<![A-Za-z0-9])U(\d{1,2})(?!\d)", str(name), flags=re.IGNORECASE)
+    if not m:
+        return None
+    return f"U{int(m.group(1))}"
+
+
+def _effective_division(stored: Optional[str], name: Optional[str]) -> Optional[str]:
+    raw = (stored or "").strip()
+    if raw and raw.lower() not in {"other", "unknown", "n/a", "na"}:
+        # Prefer canonical U-age when the stored value is a category letter etc.
+        if re.match(r"^U\d{1,2}$", raw, flags=re.IGNORECASE):
+            return f"U{int(raw[1:])}"
+        inferred = _age_from_schedule_name(name)
+        return inferred or raw
+    return _age_from_schedule_name(name) or (raw or None)
+
+
 @app.get("/api/standings/schedules")
 def standings_schedules(
     season_id: str = Query("2026-27"),
@@ -867,6 +900,20 @@ def standings_schedules(
     """Schedules that have standings rows (for the league picker)."""
     conn = db()
     try:
+        seasons = [
+            r[0]
+            for r in conn.execute(
+                """
+                SELECT DISTINCT season_id FROM standings
+                WHERE season_id IS NOT NULL AND season_id != ''
+                ORDER BY season_id DESC
+                """
+            ).fetchall()
+        ]
+        if not season_id and seasons:
+            season_id = seasons[0]
+        default_season = seasons[0] if seasons else season_id
+
         sql = """
             SELECT DISTINCT s.id, s.name, s.type, s.division, s.gender, s.category, s.office_id AS officeId,
                    st.group_id,
@@ -877,9 +924,6 @@ def standings_schedules(
             WHERE st.season_id=?
         """
         params: list[Any] = [season_id]
-        if division:
-            sql += " AND s.division = ?"
-            params.append(division)
         if type:
             sql += " AND s.type = ?"
             params.append(type)
@@ -889,23 +933,17 @@ def standings_schedules(
         sql += " ORDER BY s.division ASC, s.type ASC, s.name ASC, gr.name ASC"
         rows = conn.execute(sql, params).fetchall()
         by_id: dict[int, dict] = {}
-        divisions = set()
-        types = set()
-        genders = set()
         for r in rows:
             sid = r["id"]
-            if r["division"]:
-                divisions.add(r["division"])
-            if r["type"]:
-                types.add(r["type"])
-            if r["gender"]:
-                genders.add(r["gender"])
+            eff_div = _effective_division(r["division"], r["name"])
+            if division and eff_div != division:
+                continue
             if sid not in by_id:
                 by_id[sid] = {
                     "id": sid,
                     "name": r["name"],
                     "type": r["type"],
-                    "division": r["division"],
+                    "division": eff_div,
                     "gender": r["gender"],
                     "category": r["category"],
                     "officeId": r["officeId"],
@@ -918,19 +956,28 @@ def standings_schedules(
         # Facets from all standings schedules this season (unfiltered), for the dropdowns
         facet_rows = conn.execute(
             """
-            SELECT DISTINCT s.division, s.type, s.gender
+            SELECT DISTINCT s.name, s.division, s.type, s.gender
             FROM standings st
             JOIN schedules s ON s.id = st.schedule_id
             WHERE st.season_id=?
             """,
             (season_id,),
         ).fetchall()
-        all_divisions = sorted({r["division"] for r in facet_rows if r["division"]}, key=_division_sort_key)
+        all_divisions = sorted(
+            {
+                d
+                for r in facet_rows
+                if (d := _effective_division(r["division"], r["name"]))
+            },
+            key=_division_sort_key,
+        )
         all_types = sorted({r["type"] for r in facet_rows if r["type"]})
         all_genders = sorted({r["gender"] for r in facet_rows if r["gender"]})
 
         return {
             "seasonId": season_id,
+            "defaultSeason": default_season,
+            "seasons": seasons,
             "division": division,
             "type": type,
             "gender": gender,

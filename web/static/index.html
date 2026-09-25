@@ -9,8 +9,16 @@
     <link
       href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@400;600;700&display=swap"
       rel="stylesheet"
+      media="print"
+      onload="this.media='all'"
     />
-    <link rel="stylesheet" href="/static/styles.css" />
+    <noscript>
+      <link
+        href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@400;600;700&display=swap"
+        rel="stylesheet"
+      />
+    </noscript>
+    <link rel="stylesheet" href="/static/styles.css?v=20260925f" />
   </head>
   <body>
     <header class="top">
@@ -95,8 +103,12 @@
           <select name="group_id"><option value="">All groups</option></select>
         </label>
       </form>
-      <p id="standings-status" class="status">Pick a schedule to load standings.</p>
+      <p id="standings-status" class="status">Loading standings…</p>
       <div id="standings-table" class="table-wrap"></div>
+      <details id="standings-league-picker" class="league-picker">
+        <summary>Browse all leagues</summary>
+        <div id="standings-schedule-list" class="schedule-list"></div>
+      </details>
     </section>
 
     <section id="view-team" class="view" hidden>
@@ -191,6 +203,6 @@
       <div id="game-lineups" class="lineups-grid"></div>
     </section>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=20260925f"></script>
   </body>
 </html>
