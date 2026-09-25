@@ -34,7 +34,6 @@ let loading = false;
 let filterData = null;
 let standingsSchedulesCache = [];
 let suppressStandingsEvents = false;
-let routeSeq = 0;
 const sortState = new WeakMap();
 
 function fillSelect(select, items, { value, label, blank }) {
@@ -1044,31 +1043,37 @@ async function ensureScheduleFilters() {
 }
 
 async function route() {
-  const seq = ++routeSeq;
   const { parts, params } = parseHash();
   const view = parts[0] || "schedule";
 
   if (view === "standings") {
     showView("standings", "Standings");
+    const status = document.getElementById("standings-status");
+    if (status) status.textContent = "Loading standings…";
     suppressStandingsEvents = true;
-    if (params.season_id) standingsForm.elements.season_id.value = params.season_id;
-    if (params.division) standingsForm.elements.division.value = params.division;
-    if (params.type) {
-      const typeEl = standingsTypeSelect(standingsForm);
-      if (typeEl) typeEl.value = params.type;
+    try {
+      if (params.season_id) standingsForm.elements.season_id.value = params.season_id;
+      if (params.division) standingsForm.elements.division.value = params.division;
+      if (params.type) {
+        const typeEl = standingsTypeSelect(standingsForm);
+        if (typeEl) typeEl.value = params.type;
+      }
+    } finally {
+      suppressStandingsEvents = false;
     }
-    suppressStandingsEvents = false;
     await loadStandingsSchedules({
       preserveSchedule: Boolean(params.schedule_id),
       autoSelect: !params.schedule_id,
     });
-    if (seq !== routeSeq) return;
     if (params.schedule_id) {
       suppressStandingsEvents = true;
-      standingsForm.elements.schedule_id.value = String(params.schedule_id);
-      updateStandingsGroups();
-      if (params.group_id) standingsForm.elements.group_id.value = String(params.group_id);
-      suppressStandingsEvents = false;
+      try {
+        standingsForm.elements.schedule_id.value = String(params.schedule_id);
+        updateStandingsGroups();
+        if (params.group_id) standingsForm.elements.group_id.value = String(params.group_id);
+      } finally {
+        suppressStandingsEvents = false;
+      }
       renderStandingsScheduleList();
     }
     await loadStandings();
