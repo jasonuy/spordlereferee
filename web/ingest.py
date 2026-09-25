@@ -157,16 +157,20 @@ def upsert_group(conn, group: Optional[dict]) -> None:
 def upsert_team(conn, team: dict) -> None:
     conn.execute(
         """
-        INSERT INTO teams(id, name, short_name, office_id)
-        VALUES(?,?,?,?)
+        INSERT INTO teams(id, name, short_name, office_id, logo_url)
+        VALUES(?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
-          name=excluded.name, short_name=excluded.short_name, office_id=excluded.office_id
+          name=excluded.name,
+          short_name=excluded.short_name,
+          office_id=excluded.office_id,
+          logo_url=COALESCE(excluded.logo_url, teams.logo_url)
         """,
         (
             team["id"],
             team.get("name"),
             team.get("shortName") or team.get("abbreviation"),
             team.get("officeId"),
+            team.get("logoUrl") or team.get("logo_url"),
         ),
     )
 
@@ -905,6 +909,69 @@ def run_ingest(
     return summary
 
 
+def refresh_team_logos(db_path: Optional[Path] = None, delay: float = DEFAULT_DELAY) -> dict:
+    """Backfill logo_url for all teams already stored in SQLite."""
+    conn = connect(db_path)
+    ids = {int(r[0]) for r in conn.execute("SELECT id FROM teams").fetchall()}
+    if not ids:
+        log.info("No teams in DB to refresh")
+        conn.close()
+        return {"teams": 0, "withLogo": 0}
+    s = session()
+    teams = fetch_teams(s, ids, delay)
+    with_logo = 0
+    for tid, team in teams.items():
+        upsert_team(conn, team)
+        if team.get("logoUrl"):
+            with_logo += 1
+    conn.commit()
+    # Also try office logos for teams still missing a logoUrl
+    missing = [
+        int(r[0])
+        for r in conn.execute(
+            "SELECT id FROM teams WHERE logo_url IS NULL OR logo_url = ''"
+        ).fetchall()
+    ]
+    if missing:
+        office_ids = {
+            int(r[0])
+            for r in conn.execute(
+                f"SELECT DISTINCT office_id FROM teams WHERE id IN ({','.join('?' * len(missing))}) AND office_id IS NOT NULL",
+                missing,
+            ).fetchall()
+        }
+        office_logos: dict[int, str] = {}
+        for i, oid in enumerate(sorted(office_ids)):
+            try:
+                rows = public_get(
+                    s,
+                    "/offices",
+                    filter_param({"where": {"id": oid}}),
+                )
+                office = rows[0] if isinstance(rows, list) and rows else rows
+                if isinstance(office, dict) and office.get("logoUrl"):
+                    office_logos[oid] = office["logoUrl"]
+            except Exception as exc:
+                log.warning("Office %s logo fetch failed: %s", oid, exc)
+            time.sleep(delay)
+        for tid in missing:
+            row = conn.execute(
+                "SELECT office_id FROM teams WHERE id=?", (tid,)
+            ).fetchone()
+            if not row or not row[0]:
+                continue
+            url = office_logos.get(int(row[0]))
+            if url:
+                conn.execute("UPDATE teams SET logo_url=? WHERE id=?", (url, tid))
+                with_logo += 1
+        conn.commit()
+    summary = {"teams": len(ids), "fetched": len(teams), "withLogo": with_logo}
+    log.info("Logos refreshed: %s", summary)
+    conn.close()
+    return summary
+
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--season", default="2026-27")
@@ -914,6 +981,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY)
     parser.add_argument("--force", action="store_true", help="Refetch scoresheets")
     parser.add_argument("--rebuild-only", action="store_true")
+    parser.add_argument(
+        "--refresh-logos",
+        action="store_true",
+        help="Fetch logoUrl for every team already in the DB",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -928,6 +1000,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         conn.commit()
         conn.close()
         log.info("Rollups rebuilt")
+        return 0
+
+    if args.refresh_logos:
+        refresh_team_logos(db_path=args.db, delay=args.delay)
         return 0
 
     run_ingest(

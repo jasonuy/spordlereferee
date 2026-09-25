@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS teams (
   id INTEGER PRIMARY KEY,
   name TEXT,
   short_name TEXT,
-  office_id INTEGER
+  office_id INTEGER,
+  logo_url TEXT
 );
 
 CREATE TABLE IF NOT EXISTS players (
@@ -209,7 +210,15 @@ def connect(db_path: Optional[Path] = None) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(teams)").fetchall()}
+    if "logo_url" not in cols:
+        conn.execute("ALTER TABLE teams ADD COLUMN logo_url TEXT")
+        conn.commit()
 
 
 def rows_to_dicts(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:

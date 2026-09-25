@@ -86,6 +86,20 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+function teamLogo(url, name, { size = "md" } = {}) {
+  const initial = escapeHtml(((name || "?").trim().charAt(0) || "?").toUpperCase());
+  if (!url) {
+    return `<span class="team-logo team-logo-${size} team-logo-fallback" aria-hidden="true">${initial}</span>`;
+  }
+  return `<img class="team-logo team-logo-${size}" src="${escapeHtml(url)}" alt="" loading="lazy" decoding="async" onerror="this.outerHTML='<span class=\\'team-logo team-logo-${size} team-logo-fallback\\' aria-hidden=\\'true\\'>${initial}</span>'" />`;
+}
+
+function teamLinkLabel(name, url, href, { size = "md" } = {}) {
+  const inner = `${teamLogo(url, name, { size })}<span class="team-name">${escapeHtml(name || "TBD")}</span>`;
+  if (!href) return `<span class="team-with-logo">${inner}</span>`;
+  return `<a class="team-with-logo" href="${href}">${inner}</a>`;
+}
+
 function parseHash() {
   const raw = (location.hash || "#/schedule").replace(/^#\/?/, "");
   const [path, qs] = raw.split("?");
@@ -314,10 +328,18 @@ function renderGames(payload) {
         <article class="game">
           <div>
             <div class="meta">${escapeHtml(game.number)} · ${escapeHtml(when)}${league ? ` · ${escapeHtml(league)}` : ""}</div>
-            <div class="title">
-              <a href="#/team/${game.awayTeamId}?season_id=${encodeURIComponent(fields.season_id.value)}">${escapeHtml(game.away)}</a>
-              @
-              <a href="#/team/${game.homeTeamId}?season_id=${encodeURIComponent(fields.season_id.value)}">${escapeHtml(game.home)}</a>
+            <div class="title matchup">
+              ${teamLinkLabel(
+                game.away,
+                game.awayLogoUrl,
+                `#/team/${game.awayTeamId}?season_id=${encodeURIComponent(fields.season_id.value)}`,
+              )}
+              <span class="at">@</span>
+              ${teamLinkLabel(
+                game.home,
+                game.homeLogoUrl,
+                `#/team/${game.homeTeamId}?season_id=${encodeURIComponent(fields.season_id.value)}`,
+              )}
             </div>
             <div class="venue">${escapeHtml([game.venue, game.city].filter(Boolean).join(" · "))}</div>
           </div>
@@ -551,7 +573,11 @@ async function loadStandings() {
           key: "team_name",
           label: "Team",
           render: (r) =>
-            `<a href="#/team/${r.team_id}?season_id=${encodeURIComponent(season)}&schedule_id=${r.schedule_id}">${escapeHtml(r.team_name)}</a>`,
+            teamLinkLabel(
+              r.team_name,
+              r.logoUrl,
+              `#/team/${r.team_id}?season_id=${encodeURIComponent(season)}&schedule_id=${r.schedule_id}`,
+            ),
         },
         { key: "gp", label: "GP", numeric: true },
         { key: "w", label: "W", numeric: true },
@@ -579,7 +605,11 @@ async function loadStandings() {
             key: "team_name",
             label: "Team",
             render: (r) =>
-              `<a href="#/team/${r.team_id}?season_id=${encodeURIComponent(season)}&schedule_id=${r.schedule_id}">${escapeHtml(r.team_name)}</a>`,
+              teamLinkLabel(
+                r.team_name,
+                r.logoUrl,
+                `#/team/${r.team_id}?season_id=${encodeURIComponent(season)}&schedule_id=${r.schedule_id}`,
+              ),
           },
           { key: "gp", label: "GP", numeric: true },
           { key: "w", label: "W", numeric: true },
@@ -621,7 +651,7 @@ async function loadTeam(teamId, params) {
         <a href="#/standings">← Standings</a>
         ${st ? ` · ${st.gp} GP · ${st.pts} PTS · ${st.w}-${st.l}-${st.t}` : ""}
       </p>
-      <h2>${escapeHtml(team.name || "")}</h2>
+      <h2 class="team-heading">${teamLogo(team.logo_url || team.logoUrl, team.name, { size: "lg" })}<span>${escapeHtml(team.name || "")}</span></h2>
     `;
 
     const season = data.seasonId;
@@ -765,7 +795,12 @@ async function loadLeaders() {
       label: "Team",
       render: (r) =>
         r.team_id
-          ? `<a href="#/team/${r.team_id}?season_id=${encodeURIComponent(season)}&schedule_id=${r.schedule_id}">${escapeHtml(r.team_name || "")}</a>`
+          ? teamLinkLabel(
+              r.team_name,
+              r.logoUrl,
+              `#/team/${r.team_id}?season_id=${encodeURIComponent(season)}&schedule_id=${r.schedule_id}`,
+              { size: "sm" },
+            )
           : "",
     };
 
@@ -907,7 +942,7 @@ async function loadSearch(params = {}) {
               .map(
                 (t) => `
               <a class="result" href="#/team/${t.id}?season_id=${encodeURIComponent(season)}${t.schedule_id ? `&schedule_id=${t.schedule_id}` : ""}">
-                <strong>${escapeHtml(t.name)}</strong>
+                <strong class="team-with-logo">${teamLogo(t.logoUrl, t.name, { size: "sm" })}<span class="team-name">${escapeHtml(t.name)}</span></strong>
                 <span>${escapeHtml(t.schedule_name || "")}${t.pts != null ? ` · ${t.pts} pts` : ""}</span>
               </a>`,
               )
@@ -933,10 +968,10 @@ async function loadGame(gameId) {
     status.textContent = "";
     document.getElementById("game-header").innerHTML = `
       <p class="meta">${escapeHtml(g.date || "")} · ${escapeHtml(g.schedule_name || "")}${g.group_name ? ` · ${escapeHtml(g.group_name)}` : ""}</p>
-      <h2>
-        <a href="#/team/${g.away_team_id}?season_id=${encodeURIComponent(g.season_id || "2026-27")}">${escapeHtml(g.away_name || "Away")}</a>
-        ${g.away_score ?? "—"} – ${g.home_score ?? "—"}
-        <a href="#/team/${g.home_team_id}?season_id=${encodeURIComponent(g.season_id || "2026-27")}">${escapeHtml(g.home_name || "Home")}</a>
+      <h2 class="matchup-score">
+        ${teamLinkLabel(g.away_name || "Away", g.awayLogoUrl, `#/team/${g.away_team_id}?season_id=${encodeURIComponent(g.season_id || "2026-27")}`, { size: "lg" })}
+        <span class="score-mid">${g.away_score ?? "—"} – ${g.home_score ?? "—"}</span>
+        ${teamLinkLabel(g.home_name || "Home", g.homeLogoUrl, `#/team/${g.home_team_id}?season_id=${encodeURIComponent(g.season_id || "2026-27")}`, { size: "lg" })}
       </h2>
       <p><a class="sheet" href="${escapeHtml(g.scoresheetUrl)}" target="_blank" rel="noreferrer">Scoresheet PDF</a></p>
     `;

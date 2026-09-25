@@ -544,6 +544,8 @@ def games(
                 "away": away.get("name") or "TBD",
                 "homeTeamId": g.get("homeTeamId"),
                 "awayTeamId": g.get("awayTeamId"),
+                "homeLogoUrl": home.get("logoUrl"),
+                "awayLogoUrl": away.get("logoUrl"),
                 "homeScore": (stats.get(g.get("homeTeamId")) or {}).get("goalFor"),
                 "awayScore": (stats.get(g.get("awayTeamId")) or {}).get("goalFor"),
                 "officials": officials,
@@ -591,9 +593,11 @@ def standings(
         if group_key is None:
             rows = conn.execute(
                 """
-                SELECT * FROM standings
-                WHERE season_id=? AND schedule_id=?
-                ORDER BY pts DESC, gd DESC, gf DESC, team_name ASC
+                SELECT st.*, t.logo_url AS logoUrl
+                FROM standings st
+                LEFT JOIN teams t ON t.id = st.team_id
+                WHERE st.season_id=? AND st.schedule_id=?
+                ORDER BY st.pts DESC, st.gd DESC, st.gf DESC, st.team_name ASC
                 """,
                 (season_id, schedule_id),
             ).fetchall()
@@ -602,9 +606,11 @@ def standings(
         else:
             rows = conn.execute(
                 """
-                SELECT * FROM standings
-                WHERE season_id=? AND schedule_id=? AND group_id=?
-                ORDER BY pts DESC, gd DESC, gf DESC, team_name ASC
+                SELECT st.*, t.logo_url AS logoUrl
+                FROM standings st
+                LEFT JOIN teams t ON t.id = st.team_id
+                WHERE st.season_id=? AND st.schedule_id=? AND st.group_id=?
+                ORDER BY st.pts DESC, st.gd DESC, st.gf DESC, st.team_name ASC
                 """,
                 (season_id, schedule_id, group_key),
             ).fetchall()
@@ -750,7 +756,8 @@ def leaders(
             # Fetch a wider pool so same-name merges can still fill the board.
             fetch_n = min(max(limit * 3, limit), 200)
             q = f"""
-                SELECT ps.*, t.name AS team_name, s.name AS schedule_name, s.type AS schedule_type
+                SELECT ps.*, t.name AS team_name, t.logo_url AS logoUrl,
+                       s.name AS schedule_name, s.type AS schedule_type
                 FROM player_stats ps
                 LEFT JOIN teams t ON t.id = ps.team_id
                 LEFT JOIN schedules s ON s.id = ps.schedule_id
@@ -803,7 +810,7 @@ def player_page(
         if not player:
             raise HTTPException(404, "Player not found")
 
-        stats_sql = "SELECT ps.*, t.name AS team_name FROM player_stats ps LEFT JOIN teams t ON t.id=ps.team_id WHERE ps.season_id=? AND ps.participant_id=?"
+        stats_sql = "SELECT ps.*, t.name AS team_name, t.logo_url AS logoUrl FROM player_stats ps LEFT JOIN teams t ON t.id=ps.team_id WHERE ps.season_id=? AND ps.participant_id=?"
         stats_params: list[Any] = [season_id, participant_id]
         if schedule_id is not None:
             stats_sql += " AND ps.schedule_id=?"
@@ -911,7 +918,7 @@ def search(
         teams = rows_to_dicts(
             conn.execute(
                 """
-                SELECT DISTINCT t.id, t.name, st.schedule_id, s.name AS schedule_name,
+                SELECT DISTINCT t.id, t.name, t.logo_url AS logoUrl, st.schedule_id, s.name AS schedule_name,
                        st.pts, st.gp, st.group_id
                 FROM teams t
                 LEFT JOIN standings st ON st.team_id = t.id AND st.season_id=?
@@ -937,6 +944,7 @@ def game_recap(game_id: int) -> dict:
         game = conn.execute(
             """
             SELECT g.*, ht.name AS home_name, at.name AS away_name,
+                   ht.logo_url AS homeLogoUrl, at.logo_url AS awayLogoUrl,
                    s.name AS schedule_name, s.type AS schedule_type,
                    gr.name AS group_name
             FROM games g
