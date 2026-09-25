@@ -845,6 +845,18 @@ async function loadPlayer(participantId, params) {
 
 async function loadSearch(params = {}) {
   showView("search", "Search");
+  // Prefer SQLite seasons so Search works without Spordle filters.
+  if (!searchForm.elements.season_id.options.length) {
+    try {
+      const meta = await getJson("/api/standings/schedules");
+      const seasons = meta.seasons?.length ? meta.seasons : ["2026-27"];
+      fillSelect(searchForm.elements.season_id, seasons, { value: (s) => s, label: (s) => s });
+      searchForm.elements.season_id.value = meta.defaultSeason || seasons[0];
+    } catch {
+      fillSelect(searchForm.elements.season_id, ["2026-27"], { value: (s) => s, label: (s) => s });
+      searchForm.elements.season_id.value = "2026-27";
+    }
+  }
   if (params.q) searchForm.elements.q.value = params.q;
   if (params.season_id) searchForm.elements.season_id.value = params.season_id;
   const q = searchForm.elements.q.value.trim();
@@ -857,11 +869,11 @@ async function loadSearch(params = {}) {
   }
   status.textContent = "Searching…";
   try {
+    const season = searchForm.elements.season_id.value || "2026-27";
     const data = await getJson(
-      `/api/search?${query({ q, season_id: searchForm.elements.season_id.value })}`,
+      `/api/search?${query({ q, season_id: season })}`,
     );
     status.textContent = `${data.players.length} players · ${data.teams.length} teams`;
-    const season = searchForm.elements.season_id.value;
     root.innerHTML = `
       <div>
         <h2 class="section-title">Players</h2>
@@ -1011,6 +1023,17 @@ async function loadGame(gameId) {
   }
 }
 
+function isStandingsFamily(view) {
+  return ["standings", "team", "leaders", "player", "search", "game"].includes(view);
+}
+
+async function ensureScheduleFilters() {
+  if (filterData) return;
+  await loadFilters();
+  await loadSchedules();
+  await loadGroups();
+}
+
 async function route() {
   const { parts, params } = parseHash();
   const view = parts[0] || "schedule";
@@ -1063,12 +1086,19 @@ async function route() {
   }
 
   showView("schedule", "Schedule");
+  await ensureScheduleFilters();
   await loadGames();
 }
 
 form.addEventListener("change", async (event) => {
   page = 1;
   const name = event.target.name;
+  try {
+    await ensureScheduleFilters();
+  } catch (err) {
+    statusEl.textContent = `Could not load schedule filters: ${err.message}`;
+    return;
+  }
   if (["season_id", "office_id", "division", "gender", "type"].includes(name)) {
     await loadSchedules();
     await loadGroups();
@@ -1136,18 +1166,19 @@ window.addEventListener("hashchange", () => {
 });
 
 (async function init() {
-  try {
-    await loadFilters();
-    await loadSchedules();
-    await loadGroups();
-  } catch (err) {
-    statusEl.textContent = `Could not load schedule filters: ${err.message}`;
-  }
+  // Standings/leaders/search/team/player/game are SQLite-only — never wait on Spordle.
+  // Schedule tab loads Spordle filters lazily via ensureScheduleFilters().
   try {
     await route();
   } catch (err) {
     console.error(err);
-    const standingsStatus = document.getElementById("standings-status");
-    if (standingsStatus) standingsStatus.textContent = `Could not load standings: ${err.message}`;
+    const { parts } = parseHash();
+    const view = parts[0] || "schedule";
+    if (isStandingsFamily(view)) {
+      const standingsStatus = document.getElementById("standings-status");
+      if (standingsStatus) standingsStatus.textContent = `Could not load standings: ${err.message}`;
+    } else {
+      statusEl.textContent = `Could not load schedule: ${err.message}`;
+    }
   }
 })();
