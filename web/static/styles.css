@@ -127,6 +127,34 @@ h2 {
   margin-bottom: 20px;
 }
 
+.schedule-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -4px 0 16px;
+}
+
+.schedule-list button {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--navy);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.schedule-list button:hover,
+.schedule-list button.active {
+  background: var(--navy);
+  border-color: var(--navy);
+  color: white;
+}
+
 .search-form {
   align-items: end;
 }

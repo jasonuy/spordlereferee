@@ -372,7 +372,56 @@ function standingsTypeSelect(form) {
   return form.querySelector('select[name="type"]');
 }
 
-async function loadStandingsSchedules({ preserveSchedule = true } = {}) {
+function scheduleLabel(s) {
+  const cat = s.category ? String(s.category) : "";
+  const bits = [s.division, s.type, cat && cat !== s.name ? cat : null, s.name].filter(Boolean);
+  return bits.join(" · ");
+}
+
+function preferredScheduleId(schedules) {
+  if (!schedules.length) return "";
+  const scored = schedules.map((s) => {
+    const name = String(s.name || "").toLowerCase();
+    let score = (s.groups || []).length;
+    if (/u18a/.test(name) && /pre-?season/.test(name)) score += 100;
+    else if (/u18/.test(name) && /pre-?season/.test(name)) score += 80;
+    else if (/pre-?season/.test(name)) score += 20;
+    if (s.division === "U18") score += 10;
+    return { id: s.id, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return String(scored[0].id);
+}
+
+function renderStandingsScheduleList() {
+  const list = document.getElementById("standings-schedule-list");
+  if (!list) return;
+  const selected = standingsForm.elements.schedule_id.value;
+  if (!standingsSchedulesCache.length) {
+    list.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  list.hidden = false;
+  list.innerHTML = standingsSchedulesCache
+    .map((s) => {
+      const active = String(s.id) === String(selected) ? " active" : "";
+      return `<button type="button" data-schedule-id="${escapeHtml(s.id)}" class="${active.trim()}">${escapeHtml(scheduleLabel(s))}</button>`;
+    })
+    .join("");
+}
+
+function standingsHashParams() {
+  return {
+    season_id: standingsForm.elements.season_id.value,
+    division: standingsForm.elements.division.value,
+    type: standingsTypeSelect(standingsForm)?.value || "",
+    schedule_id: standingsForm.elements.schedule_id.value,
+    group_id: standingsForm.elements.group_id.value,
+  };
+}
+
+async function loadStandingsSchedules({ preserveSchedule = true, autoSelect = true } = {}) {
   const seasonEl = standingsForm.elements.season_id;
   const divisionEl = standingsForm.elements.division;
   const typeEl = standingsTypeSelect(standingsForm);
@@ -403,7 +452,7 @@ async function loadStandingsSchedules({ preserveSchedule = true } = {}) {
 
   // If we had to correct the season (e.g. Spordle listed 2024-25 with no stats), reload once.
   if (season && season !== (data.seasonId || "") && !division && !type) {
-    return loadStandingsSchedules({ preserveSchedule });
+    return loadStandingsSchedules({ preserveSchedule, autoSelect });
   }
 
   const divisions = data.divisions || [];
@@ -429,14 +478,12 @@ async function loadStandingsSchedules({ preserveSchedule = true } = {}) {
   fillSelect(standingsForm.elements.schedule_id, standingsSchedulesCache, {
     blank: standingsSchedulesCache.length ? "Select a schedule" : "No schedules for this season",
     value: (s) => s.id,
-    label: (s) => {
-      const cat = s.category ? String(s.category) : "";
-      const bits = [s.division, s.type, cat && cat !== s.name ? cat : null, s.name].filter(Boolean);
-      return bits.join(" · ");
-    },
+    label: (s) => scheduleLabel(s),
   });
   if (prevSchedule && [...standingsForm.elements.schedule_id.options].some((o) => o.value === prevSchedule)) {
     standingsForm.elements.schedule_id.value = prevSchedule;
+  } else if (autoSelect) {
+    standingsForm.elements.schedule_id.value = preferredScheduleId(standingsSchedulesCache);
   } else {
     standingsForm.elements.schedule_id.value = "";
   }
@@ -444,6 +491,7 @@ async function loadStandingsSchedules({ preserveSchedule = true } = {}) {
   if (prevGroup && [...standingsForm.elements.group_id.options].some((o) => o.value === prevGroup)) {
     standingsForm.elements.group_id.value = prevGroup;
   }
+  renderStandingsScheduleList();
 }
 
 function updateStandingsGroups() {
@@ -467,9 +515,10 @@ async function loadStandings() {
   if (!scheduleId) {
     const n = standingsSchedulesCache.length;
     status.textContent = n
-      ? `Pick a schedule to load standings (${n} available).`
+      ? `Pick a schedule below to load standings (${n} available).`
       : "No standings for this season yet. Run ingest or pick another season.";
     table.innerHTML = "";
+    renderStandingsScheduleList();
     return;
   }
   status.textContent = "Loading standings…";
@@ -970,12 +1019,19 @@ async function route() {
     showView("standings", "Standings");
     if (params.season_id) standingsForm.elements.season_id.value = params.season_id;
     if (params.division) standingsForm.elements.division.value = params.division;
-    if (params.type) standingsForm.elements.type.value = params.type;
-    await loadStandingsSchedules();
+    if (params.type) {
+      const typeEl = standingsTypeSelect(standingsForm);
+      if (typeEl) typeEl.value = params.type;
+    }
+    await loadStandingsSchedules({
+      preserveSchedule: Boolean(params.schedule_id),
+      autoSelect: !params.schedule_id,
+    });
     if (params.schedule_id) {
       standingsForm.elements.schedule_id.value = params.schedule_id;
       updateStandingsGroups();
       if (params.group_id) standingsForm.elements.group_id.value = params.group_id;
+      renderStandingsScheduleList();
     }
     await loadStandings();
     return;
@@ -1032,17 +1088,28 @@ pagerEl.addEventListener("click", async (event) => {
 standingsForm.addEventListener("change", async (event) => {
   const name = event.target.name;
   if (["season_id", "division", "type"].includes(name)) {
-    await loadStandingsSchedules({ preserveSchedule: name !== "season_id" });
+    await loadStandingsSchedules({ preserveSchedule: name !== "season_id", autoSelect: true });
   } else if (name === "schedule_id") {
     updateStandingsGroups();
+    renderStandingsScheduleList();
   }
-  setHash("standings", {
-    season_id: standingsForm.elements.season_id.value,
-    division: standingsForm.elements.division.value,
-    type: standingsTypeSelect(standingsForm)?.value || "",
-    schedule_id: standingsForm.elements.schedule_id.value,
-    group_id: standingsForm.elements.group_id.value,
-  });
+  setHash("standings", standingsHashParams());
+});
+
+document.getElementById("standings-schedule-list")?.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-schedule-id]");
+  if (!button) return;
+  const sid = button.dataset.scheduleId;
+  if (![...standingsForm.elements.schedule_id.options].some((o) => o.value === sid)) return;
+  standingsForm.elements.schedule_id.value = sid;
+  updateStandingsGroups();
+  renderStandingsScheduleList();
+  const next = `#/standings?${query(standingsHashParams())}`;
+  if (location.hash === next) {
+    await loadStandings();
+  } else {
+    location.hash = next;
+  }
 });
 
 leadersForm.addEventListener("change", async (event) => {
