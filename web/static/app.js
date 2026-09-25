@@ -237,10 +237,9 @@ async function loadFilters() {
     label: (t) => t,
   });
 
-  for (const f of [standingsForm, leadersForm, searchForm]) {
-    fillSelect(f.elements.season_id, seasons, { value: (s) => s, label: (s) => s });
-    f.elements.season_id.value = filterData.defaultSeason;
-  }
+  // Search can browse any Spordle season; standings/leaders seasons come from SQLite.
+  fillSelect(searchForm.elements.season_id, seasons, { value: (s) => s, label: (s) => s });
+  searchForm.elements.season_id.value = filterData.defaultSeason;
 }
 
 async function loadSchedules() {
@@ -369,41 +368,66 @@ async function loadGames() {
   }
 }
 
+function standingsTypeSelect(form) {
+  return form.querySelector('select[name="type"]');
+}
+
 async function loadStandingsSchedules({ preserveSchedule = true } = {}) {
-  const season = standingsForm.elements.season_id.value;
-  const division = standingsForm.elements.division?.value || "";
-  const type = standingsForm.elements.type?.value || "";
+  const seasonEl = standingsForm.elements.season_id;
+  const divisionEl = standingsForm.elements.division;
+  const typeEl = standingsTypeSelect(standingsForm);
+  let season = seasonEl.value;
+  const division = divisionEl?.value || "";
+  const type = typeEl?.value || "";
   const prevSchedule = preserveSchedule ? standingsForm.elements.schedule_id.value : "";
   const prevGroup = preserveSchedule ? standingsForm.elements.group_id.value : "";
   const data = await getJson(
     `/api/standings/schedules?${query({
-      season_id: season,
+      season_id: season || undefined,
       division,
       type,
     })}`,
   );
+
+  const seasons = data.seasons || [];
+  fillSelect(seasonEl, seasons, { value: (s) => s, label: (s) => s });
+  if (season && seasons.includes(season)) {
+    seasonEl.value = season;
+  } else if (data.defaultSeason && seasons.includes(data.defaultSeason)) {
+    seasonEl.value = data.defaultSeason;
+    season = data.defaultSeason;
+  } else if (seasons.length) {
+    seasonEl.value = seasons[0];
+    season = seasons[0];
+  }
+
+  // If we had to correct the season (e.g. Spordle listed 2024-25 with no stats), reload once.
+  if (season && season !== (data.seasonId || "") && !division && !type) {
+    return loadStandingsSchedules({ preserveSchedule });
+  }
+
   const divisions = data.divisions || [];
   const types = data.types || [];
-  fillSelect(standingsForm.elements.division, divisions, {
+  fillSelect(divisionEl, divisions, {
     blank: "All ages",
     value: (d) => d,
     label: (d) => d,
   });
   if (division && divisions.includes(division)) {
-    standingsForm.elements.division.value = division;
+    divisionEl.value = division;
   }
-  fillSelect(standingsForm.elements.type, types, {
+  fillSelect(typeEl, types, {
     blank: "All types",
     value: (t) => t,
     label: (t) => t,
   });
   if (type && types.includes(type)) {
-    standingsForm.elements.type.value = type;
+    typeEl.value = type;
   }
 
   standingsSchedulesCache = data.schedules || [];
   fillSelect(standingsForm.elements.schedule_id, standingsSchedulesCache, {
-    blank: standingsSchedulesCache.length ? "Select a schedule" : "No schedules match",
+    blank: standingsSchedulesCache.length ? "Select a schedule" : "No schedules for this season",
     value: (s) => s.id,
     label: (s) => {
       const cat = s.category ? String(s.category) : "";
@@ -426,8 +450,11 @@ function updateStandingsGroups() {
   const sid = Number(standingsForm.elements.schedule_id.value);
   const sched = standingsSchedulesCache.find((s) => s.id === sid);
   const groups = sched?.groups || [];
+  let blank = "All groups";
+  if (!sid) blank = "Select a schedule first";
+  else if (!groups.length) blank = "No groups";
   fillSelect(standingsForm.elements.group_id, groups, {
-    blank: groups.length ? "All groups" : "No groups",
+    blank,
     value: (g) => g.id,
     label: (g) => g.name,
   });
@@ -438,7 +465,10 @@ async function loadStandings() {
   const table = document.getElementById("standings-table");
   const scheduleId = standingsForm.elements.schedule_id.value;
   if (!scheduleId) {
-    status.textContent = "Pick a schedule to load standings.";
+    const n = standingsSchedulesCache.length;
+    status.textContent = n
+      ? `Pick a schedule to load standings (${n} available).`
+      : "No standings for this season yet. Run ingest or pick another season.";
     table.innerHTML = "";
     return;
   }
@@ -612,11 +642,26 @@ async function loadTeam(teamId, params) {
 }
 
 async function loadLeadersSchedules() {
-  const season = leadersForm.elements.season_id.value;
+  const seasonEl = leadersForm.elements.season_id;
+  let season = seasonEl.value;
   const division = leadersForm.elements.division?.value || "";
   const data = await getJson(
-    `/api/standings/schedules?${query({ season_id: season, division })}`,
+    `/api/standings/schedules?${query({ season_id: season || undefined, division })}`,
   );
+  const seasons = data.seasons || [];
+  fillSelect(seasonEl, seasons, { value: (s) => s, label: (s) => s });
+  if (season && seasons.includes(season)) {
+    seasonEl.value = season;
+  } else if (data.defaultSeason && seasons.includes(data.defaultSeason)) {
+    seasonEl.value = data.defaultSeason;
+    season = data.defaultSeason;
+  } else if (seasons.length) {
+    seasonEl.value = seasons[0];
+    season = seasons[0];
+  }
+  if (season && season !== (data.seasonId || "") && !division) {
+    return loadLeadersSchedules();
+  }
   fillSelect(leadersForm.elements.division, data.divisions || [], {
     blank: "All ages",
     value: (d) => d,
@@ -994,7 +1039,7 @@ standingsForm.addEventListener("change", async (event) => {
   setHash("standings", {
     season_id: standingsForm.elements.season_id.value,
     division: standingsForm.elements.division.value,
-    type: standingsForm.elements.type.value,
+    type: standingsTypeSelect(standingsForm)?.value || "",
     schedule_id: standingsForm.elements.schedule_id.value,
     group_id: standingsForm.elements.group_id.value,
   });
@@ -1028,8 +1073,14 @@ window.addEventListener("hashchange", () => {
     await loadFilters();
     await loadSchedules();
     await loadGroups();
+  } catch (err) {
+    statusEl.textContent = `Could not load schedule filters: ${err.message}`;
+  }
+  try {
     await route();
   } catch (err) {
-    statusEl.textContent = `Could not load filters: ${err.message}`;
+    console.error(err);
+    const standingsStatus = document.getElementById("standings-status");
+    if (standingsStatus) standingsStatus.textContent = `Could not load standings: ${err.message}`;
   }
 })();
