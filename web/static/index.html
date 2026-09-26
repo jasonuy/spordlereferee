@@ -18,7 +18,7 @@
         rel="stylesheet"
       />
     </noscript>
-    <link rel="stylesheet" href="/static/styles.css?v=20260925z" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260926h" />
   </head>
   <body>
     <header class="top">
@@ -30,6 +30,7 @@
         <nav class="main-nav" aria-label="Primary">
           <a href="#/favorites" data-nav="favorites" class="tab">Favorites</a>
           <a href="#/schedule" data-nav="schedule" class="tab">Schedule</a>
+          <a href="#/refs" data-nav="refs" class="tab">Refs</a>
           <a href="#/standings" data-nav="standings" class="tab">Standings</a>
         </nav>
         <a class="source" href="https://games.pcaha.ca" target="_blank" rel="noreferrer">games.pcaha.ca</a>
@@ -39,6 +40,115 @@
     <section id="view-favorites" class="view">
       <p id="favorites-status" class="status"></p>
       <div id="favorites-list" class="favorites-list"></div>
+    </section>
+
+    <section id="view-refs" class="view" hidden>
+      <div id="refs-auth" class="refs-auth"></div>
+      <div id="refs-app" hidden>
+        <nav class="sub-nav" aria-label="Refs sections">
+          <button type="button" data-refs-view="open" class="sub-nav-btn active">Open games</button>
+          <button type="button" data-refs-view="requested" class="sub-nav-btn">My requests</button>
+          <button type="button" data-refs-view="assigned" class="sub-nav-btn">My assignments</button>
+        </nav>
+
+        <form id="refs-filters-open" class="filters" data-refs-filters="open">
+          <label>
+            Season
+            <select name="season_id"></select>
+          </label>
+          <label>
+            Show
+            <select name="date_mode">
+              <option value="upcoming" selected>Upcoming from date</option>
+              <option value="day">On this date</option>
+            </select>
+          </label>
+          <label>
+            Date
+            <input type="date" name="day" />
+          </label>
+          <label>
+            Crew need
+            <select name="crew">
+              <option value="open" selected>Still looking</option>
+              <option value="any">Any</option>
+              <option value="staffed">Fully staffed</option>
+            </select>
+          </label>
+          <label>
+            Position
+            <select name="position">
+              <option value="any">Any</option>
+              <option value="Referee">Referee</option>
+              <option value="Linesperson">Linesperson</option>
+            </select>
+          </label>
+          <label class="refs-multi">
+            Age groups
+            <select name="division" multiple size="6"></select>
+            <span class="field-hint">U7–U21 only · ⌘/Ctrl-click for multiple · empty = all</span>
+          </label>
+          <label>
+            Program
+            <select name="gender">
+              <option value="">All programs</option>
+              <option value="Male">Boys</option>
+              <option value="Female">Girls</option>
+              <option value="Integrated">Integrated</option>
+            </select>
+          </label>
+          <label class="grow">
+            Home address
+            <input type="text" name="home" placeholder="e.g. Burnaby, BC" autocomplete="street-address" />
+          </label>
+          <label>
+            Max km
+            <input type="number" name="max_distance_km" min="0" step="1" placeholder="Any" />
+          </label>
+        </form>
+
+        <form id="refs-filters-requested" class="filters" data-refs-filters="requested" hidden>
+          <label>
+            Season
+            <select name="season_id"></select>
+          </label>
+          <label>
+            Position
+            <select name="position">
+              <option value="any">Any</option>
+              <option value="Referee">Referee</option>
+              <option value="Linesperson">Linesperson</option>
+            </select>
+          </label>
+        </form>
+
+        <form id="refs-filters-assigned" class="filters" data-refs-filters="assigned" hidden>
+          <label>
+            Season
+            <select name="season_id"></select>
+          </label>
+          <label>
+            Games
+            <select name="when">
+              <option value="all">All</option>
+              <option value="upcoming" selected>Upcoming</option>
+              <option value="completed">Completed</option>
+            </select>
+          </label>
+          <label>
+            Position
+            <select name="position">
+              <option value="any">Any</option>
+              <option value="Referee">Referee</option>
+              <option value="Linesperson">Linesperson</option>
+            </select>
+          </label>
+        </form>
+        <p id="refs-status" class="status"></p>
+        <div id="refs-pay-summary" class="refs-pay-summary" hidden></div>
+        <div id="refs-games" class="games"></div>
+        <nav id="refs-pager" class="pager" hidden></nav>
+      </div>
     </section>
 
     <section id="view-schedule" class="view" hidden>
@@ -248,6 +358,6 @@
       <div id="game-lineups" class="lineups-grid"></div>
     </section>
 
-    <script src="/static/app.js?v=20260925z"></script>
+    <script src="/static/app.js?v=20260926h"></script>
   </body>
 </html>

@@ -1,6 +1,7 @@
 const views = {
   favorites: document.getElementById("view-favorites"),
   schedule: document.getElementById("view-schedule"),
+  refs: document.getElementById("view-refs"),
   standings: document.getElementById("view-standings"),
   team: document.getElementById("view-team"),
   leaders: document.getElementById("view-leaders"),
@@ -206,7 +207,14 @@ async function getJson(url) {
 function query(params) {
   const qs = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
-    if (value !== "" && value != null) qs.set(key, value);
+    if (value === "" || value == null) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item !== "" && item != null) qs.append(key, item);
+      }
+    } else {
+      qs.set(key, value);
+    }
   }
   return qs.toString();
 }
@@ -265,6 +273,7 @@ function showView(name, title) {
   const standingsFamily = ["standings", "team", "leaders", "player", "search", "game"];
   let topTab = "schedule";
   if (name === "favorites") topTab = "favorites";
+  else if (name === "refs") topTab = "refs";
   else if (standingsFamily.includes(name)) topTab = "standings";
   document.querySelectorAll(".main-nav a").forEach((a) => {
     a.classList.toggle("active", a.dataset.nav === topTab);
@@ -2012,6 +2021,10 @@ async function route() {
     await loadGame(parts[1]);
     return;
   }
+  if (view === "refs") {
+    await loadRefs();
+    return;
+  }
 
   showView("schedule", "Schedule");
   await ensureScheduleFilters();
@@ -2172,6 +2185,643 @@ document.addEventListener("click", (event) => {
   const view = parts[0] || "favorites";
   if (view === "favorites" || view === "my-teams" || view === "home" || view === "following") {
     loadFavorites().catch(console.error);
+  }
+});
+
+const REFS_AGE_GROUPS = ["U7", "U9", "U11", "U13", "U15", "U18", "U21"];
+
+function refsAgeGroupOptions() {
+  const fromApi = filterData?.divisions || [];
+  const byName = new Map(
+    fromApi.map((d) => [String(d.name || d).toUpperCase(), d.name || d]),
+  );
+  // Fixed PCAHA/ice list — ignore Spordle extras like U4, Junior, Other.
+  return REFS_AGE_GROUPS.map((name) => {
+    const match = byName.get(name);
+    if (match && typeof match === "object") return match;
+    return { id: name, name };
+  });
+}
+const refsAuthEl = document.getElementById("refs-auth");
+const refsAppEl = document.getElementById("refs-app");
+const refsGamesEl = document.getElementById("refs-games");
+const refsStatusEl = document.getElementById("refs-status");
+const refsPagerEl = document.getElementById("refs-pager");
+const refsForms = {
+  open: document.getElementById("refs-filters-open"),
+  requested: document.getElementById("refs-filters-requested"),
+  assigned: document.getElementById("refs-filters-assigned"),
+};
+
+let refsMe = null;
+let refsView = "open"; // open | requested | assigned
+let refsPage = 1;
+let refsLoading = false;
+let refsSuppressEvents = false;
+let refsLoadSeq = 0;
+let refsFiltersReady = false;
+
+function refsActiveForm() {
+  return refsForms[refsView] || refsForms.open;
+}
+
+function showRefsFilterForm() {
+  for (const [key, form] of Object.entries(refsForms)) {
+    if (!form) continue;
+    const active = key === refsView;
+    form.hidden = !active;
+    form.style.display = active ? "" : "none";
+  }
+}
+
+function beginRefsLoad() {
+  refsLoadSeq += 1;
+  refsLoading = true;
+  return refsLoadSeq;
+}
+
+function isRefsLoadCurrent(seq) {
+  return seq === refsLoadSeq;
+}
+
+function getRefsPrefs() {
+  try {
+    return JSON.parse(localStorage.getItem(REFS_PREFS_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function setRefsPrefs(patch) {
+  const next = { ...getRefsPrefs(), ...patch };
+  localStorage.setItem(REFS_PREFS_KEY, JSON.stringify(next));
+  return next;
+}
+
+async function refsApi(path, { method = "GET", body } = {}) {
+  const opts = {
+    method,
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+  };
+  if (body !== undefined) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const resp = await fetch(`/api/refs${path}`, opts);
+  const text = await resp.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { detail: text };
+  }
+  if (!resp.ok) {
+    const detail = data?.detail;
+    const msg =
+      typeof detail === "string"
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map((d) => d.msg || JSON.stringify(d)).join("; ")
+          : resp.statusText;
+    const err = new Error(msg || `HTTP ${resp.status}`);
+    err.status = resp.status;
+    throw err;
+  }
+  return data;
+}
+
+function renderRefsAuth() {
+  if (!refsAuthEl) return;
+  if (refsMe?.signedIn) {
+    const identities = refsMe.identities || [];
+    refsAuthEl.innerHTML = `
+      <div class="refs-session">
+        <div>
+          <strong>${escapeHtml(refsMe.displayName || refsMe.username)}</strong>
+          <span class="muted"> · signed in · password not stored</span>
+          ${
+            (refsMe.identities || []).find((i) => String(i.id) === String(refsMe.identityId))
+              ?.tenant
+              ? `<div class="muted">Active: ${escapeHtml(
+                  (refsMe.identities || []).find((i) => String(i.id) === String(refsMe.identityId))
+                    ?.tenant || "",
+                )}</div>`
+              : ""
+          }
+          ${
+            refsMe.grades && Object.keys(refsMe.grades).length
+              ? `<div class="muted">Grades: ${escapeHtml(
+                  Object.entries(refsMe.grades)
+                    .map(([k, v]) => `${k} ${v}`)
+                    .join(" · "),
+                )}</div>`
+              : ""
+          }
+        </div>
+        <div class="refs-session-actions">
+          ${
+            identities.length > 1
+              ? `<label class="refs-identity">Identity
+                  <select id="refs-identity">
+                    ${identities
+                      .map(
+                        (i) =>
+                          `<option value="${escapeHtml(i.id)}" ${
+                            String(i.id) === String(refsMe.identityId) ? "selected" : ""
+                          }>${escapeHtml(i.name || i.id)}${
+                            i.tenant ? ` (${escapeHtml(i.tenant)})` : ""
+                          }</option>`,
+                      )
+                      .join("")}
+                  </select>
+                </label>`
+              : ""
+          }
+          <button type="button" id="refs-logout" class="btn-export">Sign out</button>
+        </div>
+      </div>
+    `;
+    refsAppEl.hidden = false;
+  } else {
+    refsAppEl.hidden = true;
+    refsAuthEl.innerHTML = `
+      <div class="refs-login-card">
+        <h2>Sign in with Spordle</h2>
+        <p class="muted">
+          Your password is sent once to Spordle to get a session token.
+          We never save your password — only a short-lived session cookie on this device.
+        </p>
+        <form id="refs-login-form" class="refs-login-form">
+          <label>
+            Email / username
+            <input name="username" type="text" autocomplete="username" required />
+          </label>
+          <label>
+            Password
+            <input name="password" type="password" autocomplete="current-password" required />
+          </label>
+          <button type="submit" class="sheet">Sign in</button>
+          <p id="refs-login-error" class="status" hidden></p>
+        </form>
+      </div>
+    `;
+  }
+}
+
+async function refreshRefsMe() {
+  refsMe = await refsApi("/me");
+  renderRefsAuth();
+  return refsMe;
+}
+
+function applyRefsPrefsToForm() {
+  const prefs = getRefsPrefs();
+  const open = refsForms.open;
+  if (open) {
+    if (prefs.home && open.elements.home) open.elements.home.value = prefs.home;
+    if (prefs.max_distance_km != null && open.elements.max_distance_km) {
+      open.elements.max_distance_km.value = prefs.max_distance_km;
+    }
+    if (prefs.position && open.elements.position) open.elements.position.value = prefs.position;
+    if (prefs.crew && open.elements.crew) open.elements.crew.value = prefs.crew;
+    if (prefs.gender != null && open.elements.gender) open.elements.gender.value = prefs.gender;
+    if (Array.isArray(prefs.divisions) && open.elements.division) {
+      const allowed = new Set(REFS_AGE_GROUPS);
+      const wanted = new Set(
+        prefs.divisions.map(String).filter((name) => allowed.has(name)),
+      );
+      [...open.elements.division.options].forEach((opt) => {
+        opt.selected = wanted.has(opt.value);
+      });
+    }
+  }
+  if (refsForms.assigned?.elements.when && prefs.assignedWhen) {
+    refsForms.assigned.elements.when.value = prefs.assignedWhen;
+  }
+  if (refsForms.assigned?.elements.position && prefs.assignedPosition) {
+    refsForms.assigned.elements.position.value = prefs.assignedPosition;
+  }
+  if (refsForms.requested?.elements.position && prefs.requestedPosition) {
+    refsForms.requested.elements.position.value = prefs.requestedPosition;
+  }
+}
+
+function saveRefsPrefsFromForm() {
+  const open = refsForms.open;
+  const divisions = [...(open?.elements.division?.selectedOptions || [])].map((o) => o.value);
+  setRefsPrefs({
+    home: open?.elements.home?.value?.trim() || "",
+    max_distance_km: open?.elements.max_distance_km?.value || "",
+    position: open?.elements.position?.value || "any",
+    crew: open?.elements.crew?.value || "open",
+    gender: open?.elements.gender?.value || "",
+    divisions,
+    assignedWhen: refsForms.assigned?.elements.when?.value || "upcoming",
+    assignedPosition: refsForms.assigned?.elements.position?.value || "any",
+    requestedPosition: refsForms.requested?.elements.position?.value || "any",
+  });
+}
+
+function selectedRefsDivisions() {
+  return [...(refsForms.open?.elements.division?.selectedOptions || [])]
+    .map((o) => o.value)
+    .filter(Boolean);
+}
+
+function seedRefsSeasonSelects() {
+  const seasons = filterData?.seasons || ["2026-27", "2025-26"];
+  const defaultSeason = filterData?.defaultSeason || seasons[0];
+  for (const form of Object.values(refsForms)) {
+    if (!form?.elements.season_id) continue;
+    const prev = form.elements.season_id.value;
+    fillSelect(form.elements.season_id, seasons, { value: (s) => s, label: (s) => s });
+    form.elements.season_id.value =
+      prev && seasons.includes(prev) ? prev : defaultSeason;
+  }
+}
+
+function formatMoney(amount) {
+  if (amount == null || Number.isNaN(Number(amount))) return "—";
+  return `$${Number(amount).toFixed(2)}`;
+}
+
+function renderRefsPaySummary(pay, { seasonStart } = {}) {
+  const el = document.getElementById("refs-pay-summary");
+  if (!el) return;
+  if (!pay) {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  el.hidden = false;
+  el.innerHTML = `
+    <div class="refs-pay-card">
+      <span class="refs-pay-label">Earned so far</span>
+      <strong>${formatMoney(pay.earned)}</strong>
+    </div>
+    <div class="refs-pay-card">
+      <span class="refs-pay-label">Upcoming</span>
+      <strong>${formatMoney(pay.future)}</strong>
+    </div>
+    <div class="refs-pay-card total">
+      <span class="refs-pay-label">Season total${seasonStart ? ` · from ${escapeHtml(seasonStart)}` : ""}</span>
+      <strong>${formatMoney(pay.total)}</strong>
+    </div>
+  `;
+}
+
+function refsOfficialChips(game) {
+  const bits = [];
+  if (game.pay != null) {
+    bits.push(`<span class="chip pay">${escapeHtml(formatMoney(game.pay))}</span>`);
+  }
+  if (game.assignmentPosition) {
+    bits.push(`<span class="chip mine">${escapeHtml(game.assignmentPosition)}</span>`);
+  }
+  if (game.needsReferee) bits.push(`<span class="chip need">Needs referee</span>`);
+  if (game.needsLinesperson) bits.push(`<span class="chip need">Needs lines</span>`);
+  if (game.unassigned != null) bits.push(`<span class="chip">${game.unassigned} open</span>`);
+  if (game.myRequested) bits.push(`<span class="chip mine">You requested</span>`);
+  if (game.myAssigned && !game.assignmentPosition) {
+    bits.push(`<span class="chip mine">You’re assigned</span>`);
+  }
+  if (game.conflicts?.length) {
+    bits.push(`<span class="chip warn">Conflicts with ${game.conflicts.length} of yours</span>`);
+  }
+  if (game.distanceKm != null) bits.push(`<span class="chip">${game.distanceKm} km</span>`);
+  (game.crew || []).forEach((c) => {
+    bits.push(
+      `<span class="chip"><span class="pos">${escapeHtml(c.position)}</span> ${escapeHtml(c.name)}</span>`,
+    );
+  });
+  return bits.join("") || `<span class="chip none">No crew info</span>`;
+}
+
+function refsActionButtons(game) {
+  if (game.myAssigned) {
+    return `<span class="muted">Assigned</span>`;
+  }
+  if (game.myRequested) {
+    return `<button type="button" class="sheet ghost" data-refs-unrequest="${game.id}">Unrequest</button>`;
+  }
+  const btns = [];
+  if (game.needsReferee || refsView !== "open") {
+    btns.push(
+      `<button type="button" class="sheet" data-refs-request="${game.id}" data-position="Referee">Request referee</button>`,
+    );
+  }
+  if (game.needsLinesperson || refsView !== "open") {
+    btns.push(
+      `<button type="button" class="sheet ghost" data-refs-request="${game.id}" data-position="Linesperson">Request lines</button>`,
+    );
+  }
+  if (!btns.length && game.open) {
+    btns.push(
+      `<button type="button" class="sheet" data-refs-request="${game.id}" data-position="Referee">Request referee</button>`,
+      `<button type="button" class="sheet ghost" data-refs-request="${game.id}" data-position="Linesperson">Request lines</button>`,
+    );
+  }
+  return btns.join("");
+}
+
+function renderRefsGameCard(game) {
+  const when = [game.date, game.startTime && game.endTime ? `${game.startTime} – ${game.endTime}` : game.startTime]
+    .filter(Boolean)
+    .join(" · ");
+  const league = [game.division, game.category, game.group].filter(Boolean).join(" · ");
+  return `
+    <article class="game">
+      <div>
+        <div class="meta">${escapeHtml(game.number || "")} · ${escapeHtml(when)}${
+          league ? ` · ${escapeHtml(league)}` : ""
+        }</div>
+        <div class="title matchup">
+          ${teamLinkLabel(game.away, game.awayLogoUrl, game.awayTeamId ? `#/team/${game.awayTeamId}` : null)}
+          <span class="at">@</span>
+          ${teamLinkLabel(game.home, game.homeLogoUrl, game.homeTeamId ? `#/team/${game.homeTeamId}` : null)}
+        </div>
+        <div class="venue">${escapeHtml([game.venue, game.venueAddress].filter(Boolean).join(" · "))}</div>
+      </div>
+      <div class="side">
+        ${refsActionButtons(game)}
+        <a class="sheet ghost" href="#/game/${game.id}">Recap</a>
+      </div>
+      <div class="officials">${refsOfficialChips(game)}</div>
+    </article>
+  `;
+}
+
+function renderRefsPager(pages, current) {
+  if (!refsPagerEl) return;
+  if (pages <= 1) {
+    refsPagerEl.hidden = true;
+    refsPagerEl.innerHTML = "";
+    return;
+  }
+  const numbers = pageNumberItems(current, pages)
+    .map((item) => {
+      if (item === "…") return `<span class="pager-ellipsis">…</span>`;
+      const active = item === current;
+      return `<button type="button" data-refs-page="${item}" class="${active ? "current" : ""}" ${
+        active ? "disabled" : ""
+      }>${item}</button>`;
+    })
+    .join("");
+  refsPagerEl.hidden = false;
+  refsPagerEl.innerHTML = `
+    <button type="button" data-refs-page="${current - 1}" ${current <= 1 ? "disabled" : ""}>Prev</button>
+    ${numbers}
+    <button type="button" data-refs-page="${current + 1}" ${current >= pages ? "disabled" : ""}>Next</button>
+  `;
+}
+
+async function loadRefsOpenGames(seq = refsLoadSeq) {
+  const f = refsForms.open.elements;
+  const upcoming = f.date_mode.value === "upcoming";
+  if (!f.day.value) f.day.value = todayIso();
+  const data = await refsApi(
+    `/games?${query({
+      season_id: f.season_id.value,
+      ...(upcoming ? { from_day: f.day.value } : { day: f.day.value }),
+      division: selectedRefsDivisions(),
+      gender: f.gender.value || undefined,
+      crew: f.crew.value,
+      position: f.position.value,
+      my_status: "available",
+      home: f.home.value.trim() || undefined,
+      max_distance_km: f.max_distance_km.value || undefined,
+      page: refsPage,
+      page_size: 25,
+    })}`,
+  );
+  if (!isRefsLoadCurrent(seq) || refsView !== "open") return;
+  refsGamesEl.innerHTML =
+    data.games.map(renderRefsGameCard).join("") ||
+    `<p class="muted">No games match these filters.</p>`;
+  refsStatusEl.textContent = `${data.returned} shown · ${data.total} in Spordle window (page ${data.page})`;
+  renderRefsPaySummary(null);
+  renderRefsPager(data.pages, data.page);
+}
+
+async function loadRefsMine(kind, seq = refsLoadSeq) {
+  const form = kind === "assigned" ? refsForms.assigned : refsForms.requested;
+  const season = form?.elements.season_id?.value || "2026-27";
+  const position = form?.elements.position?.value || "any";
+  const when = kind === "assigned" ? form?.elements.when?.value || "all" : undefined;
+  if (isRefsLoadCurrent(seq)) {
+    refsStatusEl.textContent =
+      kind === "requested" ? "Loading your requests…" : "Loading your assignments…";
+    if (kind === "assigned") renderRefsPaySummary(null);
+  }
+  const data = await refsApi(
+    `/mine?${query({ season_id: season, kind, when, position })}`,
+  );
+  if (!isRefsLoadCurrent(seq) || refsView !== kind) return;
+  refsGamesEl.innerHTML =
+    data.games.map(renderRefsGameCard).join("") ||
+    `<p class="muted">${
+      kind === "requested"
+        ? "No pending requests found."
+        : "No ice hockey assignments for this filter."
+    }</p>`;
+  if (kind === "assigned") {
+    const start = data.seasonStart || "";
+    const whenLabel =
+      data.when === "upcoming" ? "upcoming" : data.when === "completed" ? "completed" : "";
+    refsStatusEl.textContent = `${data.games.length} ice hockey game${
+      data.games.length === 1 ? "" : "s"
+    }${whenLabel ? ` · ${whenLabel}` : ""}${start ? ` · season from ${start}` : ""}`;
+    renderRefsPaySummary(data.pay, { seasonStart: data.seasonStart });
+  } else {
+    refsStatusEl.textContent = `${data.games.length} game${data.games.length === 1 ? "" : "s"}`;
+    renderRefsPaySummary(null);
+  }
+  renderRefsPager(0, 1);
+}
+
+async function ensureRefsFiltersSeeded() {
+  if (refsFiltersReady) return;
+  try {
+    await ensureScheduleFilters();
+  } catch {
+    /* optional */
+  }
+  refsSuppressEvents = true;
+  try {
+    seedRefsSeasonSelects();
+    const open = refsForms.open;
+    if (open?.elements.division) {
+      fillSelect(open.elements.division, refsAgeGroupOptions(), {
+        value: (d) => d.name,
+        label: (d) => d.name,
+      });
+    }
+    if (open && !open.elements.day.value) open.elements.day.value = todayIso();
+    applyRefsPrefsToForm();
+    refsFiltersReady = true;
+  } finally {
+    // Let any sync change events flush while still suppressed.
+    await Promise.resolve();
+    refsSuppressEvents = false;
+  }
+}
+
+async function loadRefs() {
+  showView("refs", "Refs");
+  const seq = beginRefsLoad();
+  showRefsFilterForm();
+  document.querySelectorAll("[data-refs-view]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.refsView === refsView);
+  });
+  refsStatusEl.textContent = "Checking Spordle session…";
+  try {
+    await refreshRefsMe();
+    if (!isRefsLoadCurrent(seq)) return;
+  } catch (err) {
+    if (!isRefsLoadCurrent(seq)) return;
+    refsStatusEl.textContent = `Could not check session: ${err.message}`;
+    refsLoading = false;
+    return;
+  }
+  if (!refsMe?.signedIn) {
+    if (!isRefsLoadCurrent(seq)) return;
+    refsStatusEl.textContent = "";
+    refsGamesEl.innerHTML = "";
+    renderRefsPaySummary(null);
+    refsLoading = false;
+    return;
+  }
+
+  try {
+    await ensureRefsFiltersSeeded();
+    if (!isRefsLoadCurrent(seq)) return;
+
+    if (refsView === "open") await loadRefsOpenGames(seq);
+    else if (refsView === "requested") await loadRefsMine("requested", seq);
+    else await loadRefsMine("assigned", seq);
+  } catch (err) {
+    if (!isRefsLoadCurrent(seq)) return;
+    if (err.status === 401) {
+      refsMe = { signedIn: false };
+      renderRefsAuth();
+      refsStatusEl.textContent = "Session expired — sign in again.";
+    } else {
+      refsStatusEl.textContent = `Could not load: ${err.message}`;
+      refsGamesEl.innerHTML = "";
+    }
+  } finally {
+    if (isRefsLoadCurrent(seq)) refsLoading = false;
+  }
+}
+
+refsAuthEl?.addEventListener("submit", async (event) => {
+  if (event.target?.id !== "refs-login-form") return;
+  event.preventDefault();
+  const form = event.target;
+  const errEl = document.getElementById("refs-login-error");
+  const btn = form.querySelector('button[type="submit"]');
+  errEl.hidden = true;
+  btn.disabled = true;
+  const username = form.elements.username.value.trim();
+  const password = form.elements.password.value;
+  try {
+    refsMe = await refsApi("/login", { method: "POST", body: { username, password } });
+    form.elements.password.value = "";
+    renderRefsAuth();
+    await loadRefs();
+  } catch (err) {
+    errEl.hidden = false;
+    errEl.textContent = err.message;
+    form.elements.password.value = "";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+refsAuthEl?.addEventListener("click", async (event) => {
+  if (event.target?.id === "refs-logout") {
+    await refsApi("/logout", { method: "POST" });
+    refsMe = { signedIn: false };
+    renderRefsAuth();
+    refsGamesEl.innerHTML = "";
+    refsStatusEl.textContent = "";
+  }
+});
+
+refsAuthEl?.addEventListener("change", async (event) => {
+  if (event.target?.id !== "refs-identity") return;
+  try {
+    refsMe = await refsApi("/identity", {
+      method: "POST",
+      body: { identity_id: event.target.value },
+    });
+    renderRefsAuth();
+    await loadRefs();
+  } catch (err) {
+    refsStatusEl.textContent = err.message;
+  }
+});
+
+document.querySelectorAll("[data-refs-view]").forEach((btn) => {
+  btn.addEventListener("click", async (event) => {
+    event.preventDefault();
+    const next = btn.dataset.refsView;
+    if (!next || !refsForms[next]) return;
+    refsView = next;
+    refsPage = 1;
+    document.querySelectorAll("[data-refs-view]").forEach((b) => {
+      b.classList.toggle("active", b === btn);
+    });
+    showRefsFilterForm();
+    await loadRefs();
+  });
+});
+
+for (const form of Object.values(refsForms)) {
+  form?.addEventListener("change", async () => {
+    if (refsSuppressEvents || refsLoading || !refsMe?.signedIn) return;
+    // Ignore changes on hidden forms (e.g. division fill while on assignments)
+    if (form.hidden) return;
+    saveRefsPrefsFromForm();
+    refsPage = 1;
+    await loadRefs();
+  });
+}
+
+refsPagerEl?.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-refs-page]");
+  if (!button || button.disabled) return;
+  if (refsView !== "open") return;
+  refsPage = Number(button.dataset.refsPage);
+  const seq = beginRefsLoad();
+  try {
+    await loadRefsOpenGames(seq);
+  } finally {
+    if (isRefsLoadCurrent(seq)) refsLoading = false;
+  }
+});
+
+refsGamesEl?.addEventListener("click", async (event) => {
+  const req = event.target.closest("[data-refs-request]");
+  const un = event.target.closest("[data-refs-unrequest]");
+  try {
+    if (req) {
+      req.disabled = true;
+      await refsApi(`/games/${req.dataset.refsRequest}/request`, {
+        method: "POST",
+        body: { position: req.dataset.position },
+      });
+      await loadRefs();
+    } else if (un) {
+      un.disabled = true;
+      await refsApi(`/games/${un.dataset.refsUnrequest}/unrequest`, { method: "POST" });
+      await loadRefs();
+    }
+  } catch (err) {
+    refsStatusEl.textContent = err.message;
+    if (req) req.disabled = false;
+    if (un) un.disabled = false;
   }
 });
 

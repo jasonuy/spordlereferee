@@ -79,17 +79,24 @@ body {
   margin: 0 0 16px;
 }
 
-.sub-nav a {
+.sub-nav a,
+.sub-nav .sub-nav-btn {
   padding: 6px 12px;
   border-radius: 8px;
+  border: 0;
+  background: transparent;
   color: var(--muted);
   text-decoration: none;
+  font: inherit;
   font-size: 14px;
   font-weight: 600;
+  cursor: pointer;
 }
 
 .sub-nav a.active,
-.sub-nav a:hover {
+.sub-nav a:hover,
+.sub-nav .sub-nav-btn.active,
+.sub-nav .sub-nav-btn:hover {
   background: #eef3fb;
   color: var(--navy);
 }
@@ -125,6 +132,12 @@ h2 {
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 12px;
   margin-bottom: 20px;
+}
+
+/* Author `display:grid` otherwise overrides the HTML hidden attribute. */
+.filters[hidden],
+form.filters[hidden] {
+  display: none !important;
 }
 
 .schedule-list {
@@ -461,6 +474,134 @@ td .team-name {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.chip.need {
+  background: #fde8ec;
+  color: #9b1c3a;
+}
+
+.chip.mine {
+  background: #e7f6ed;
+  color: #1b6b3a;
+}
+
+.chip.pay {
+  background: #e8f5e9;
+  color: #1b5e20;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.refs-pay-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.refs-pay-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.refs-pay-card.total {
+  border-color: var(--navy);
+  background: #eef3fb;
+}
+
+.refs-pay-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.refs-pay-card strong {
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  color: var(--navy);
+}
+
+.refs-login-card {
+  max-width: 420px;
+  padding: 22px 20px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.refs-login-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.refs-login-form button.sheet {
+  justify-self: start;
+  border: 0;
+  cursor: pointer;
+}
+
+.refs-session {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px 20px;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.refs-session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.refs-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.filters .grow {
+  grid-column: span 2;
+}
+
+.refs-multi {
+  grid-row: span 2;
+}
+
+.refs-multi select[multiple] {
+  min-height: 120px;
+}
+
+.field-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+@media (max-width: 720px) {
+  .filters .grow {
+    grid-column: span 1;
+  }
 }
 
 .side {
