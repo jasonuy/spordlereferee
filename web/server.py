@@ -52,6 +52,7 @@ SEASONS = [
     "2019-20",
     "2018-19",
 ]
+CURRENT_SEASON = "2026-27"
 GENDERS = ["Male", "Female", "Integrated"]
 SCHEDULE_TYPES = [
     "League",
@@ -146,15 +147,26 @@ def date_iso(day: str) -> str:
 
 
 def games_where(
-    day: str,
-    office_id: int | None,
-    division: str | None,
-    gender: str | None,
-    schedule_id: int | None,
-    group_id: int | None,
-    team_id: int | None,
+    *,
+    day: str | None = None,
+    from_day: str | None = None,
+    office_id: int | None = None,
+    division: str | None = None,
+    gender: str | None = None,
+    schedule_id: int | None = None,
+    group_id: int | None = None,
+    team_id: int | None = None,
+    season_id: str | None = None,
 ) -> dict:
-    clauses: list[dict] = [{"date": date_iso(day)}]
+    clauses: list[dict] = []
+    if from_day:
+        clauses.append({"date": {"gte": date_iso(from_day)}})
+    elif day:
+        clauses.append({"date": date_iso(day)})
+    else:
+        clauses.append({"date": date_iso(date.today().isoformat())})
+    if season_id:
+        clauses.append({"seasonId": season_id})
     if division:
         clauses.append({"division": division})
     if gender:
@@ -184,6 +196,21 @@ def format_local_time(iso: str | None, tz_name: str | None) -> str | None:
         return iso
 
 
+def duration_hhmm(start_iso: str | None, end_iso: str | None) -> str:
+    """TeamSnap Duration (HH:MM) column — e.g. 1:15, 2:00."""
+    if not start_iso or not end_iso:
+        return "1:15"
+    try:
+        start = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+        minutes = max(int((end - start).total_seconds() // 60), 0)
+        if minutes <= 0:
+            return "1:15"
+        return f"{minutes // 60}:{minutes % 60:02d}"
+    except Exception:
+        return "1:15"
+
+
 def venue_label(surface: dict | None) -> str:
     if not surface:
         return ""
@@ -195,11 +222,86 @@ def venue_label(surface: dict | None) -> str:
     return name or rink or ""
 
 
+def venue_name(surface: dict | None) -> str:
+    if not surface:
+        return ""
+    venue = surface.get("venue") or {}
+    return venue.get("name") or surface.get("name") or ""
+
+
+def location_details(surface: dict | None) -> str:
+    """Rink / pad within a multi-surface venue."""
+    if not surface:
+        return ""
+    venue = surface.get("venue") or {}
+    rink = surface.get("name") or ""
+    vname = venue.get("name") or ""
+    if rink and vname and rink != vname:
+        return f"Rink {rink}" if rink.isdigit() else rink
+    return ""
+
+
+def venue_address(surface: dict | None) -> str:
+    if not surface:
+        return ""
+    venue = surface.get("venue") or {}
+    parts = [
+        venue.get("address"),
+        venue.get("city"),
+        venue.get("region"),
+        venue.get("postalCode"),
+    ]
+    return ", ".join(p for p in parts if p)
+
+
 def city_label(surface: dict | None) -> str:
     if not surface:
         return ""
     venue = surface.get("venue") or {}
     return ", ".join(filter(None, [venue.get("city"), venue.get("region")]))
+
+
+def serialize_public_game(g: dict, teams: dict[int, dict]) -> dict:
+    officials = [row for row in (official_row(a) for a in g.get("officials") or []) if row]
+    officials.sort(key=lambda r: (_POSITION_ORDER.get(r["position"], 99), r["name"]))
+    stats = {s.get("teamId"): s for s in (g.get("teamStats") or [])}
+    home = teams.get(g.get("homeTeamId"), {})
+    away = teams.get(g.get("awayTeamId"), {})
+    surface = g.get("surface")
+    return {
+        "id": g["id"],
+        "number": g.get("number"),
+        "date": (g.get("date") or "")[:10],
+        "seasonId": g.get("seasonId"),
+        "startTime": format_local_time(g.get("startTime"), g.get("timezone")),
+        "endTime": format_local_time(g.get("endTime"), g.get("timezone")),
+        "duration": duration_hhmm(g.get("startTime"), g.get("endTime")),
+        "timezone": g.get("timezone"),
+        "division": g.get("division"),
+        "category": g.get("category"),
+        "gender": g.get("gender"),
+        "status": g.get("status"),
+        "isApproved": g.get("isApproved"),
+        "venue": venue_label(surface),
+        "venueName": venue_name(surface),
+        "venueAddress": venue_address(surface),
+        "locationDetails": location_details(surface),
+        "city": city_label(surface),
+        "schedule": (g.get("schedule") or {}).get("name"),
+        "scheduleType": (g.get("schedule") or {}).get("type"),
+        "scheduleId": g.get("scheduleId"),
+        "group": (g.get("group") or {}).get("name"),
+        "home": home.get("name") or "TBD",
+        "away": away.get("name") or "TBD",
+        "homeTeamId": g.get("homeTeamId"),
+        "awayTeamId": g.get("awayTeamId"),
+        "homeLogoUrl": home.get("logoUrl"),
+        "awayLogoUrl": away.get("logoUrl"),
+        "homeScore": (stats.get(g.get("homeTeamId")) or {}).get("goalFor"),
+        "awayScore": (stats.get(g.get("awayTeamId")) or {}).get("goalFor"),
+        "officials": officials,
+        "scoresheetUrl": SCORESHEET_URL.format(id=g["id"]),
+    }
 
 
 def title_case_name(name: str | None) -> str:
@@ -411,7 +513,7 @@ def filters() -> dict:
         "scheduleTypes": SCHEDULE_TYPES,
         "offices": associations,
         "divisions": [{"id": d["id"], "name": d["name"]} for d in divisions],
-        "defaultSeason": "2026-27",
+        "defaultSeason": CURRENT_SEASON,
         "defaultDate": date.today().isoformat(),
     }
 
@@ -482,19 +584,30 @@ def groups_unique(rows: list) -> list:
 @app.get("/api/games")
 def games(
     day: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    from_day: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     office_id: Optional[int] = None,
     division: Optional[str] = None,
     gender: Optional[str] = None,
     schedule_id: Optional[int] = None,
     group_id: Optional[int] = None,
     team_id: Optional[int] = None,
+    season_id: Optional[str] = None,
     page: int = Query(1, ge=1),
+    page_size: int = Query(PAGE_SIZE, ge=1, le=100),
 ) -> dict:
-    if not day:
-        day = date.today().isoformat()
-    where = games_where(day, office_id, division, gender, schedule_id, group_id, team_id)
+    where = games_where(
+        day=None if from_day else day,
+        from_day=from_day,
+        office_id=office_id,
+        division=division,
+        gender=gender,
+        schedule_id=schedule_id,
+        group_id=group_id,
+        team_id=team_id,
+        season_id=season_id,
+    )
     total = _public_get("/games/count", {"where": json.dumps(where, separators=(",", ":"))}).get("count", 0)
-    skip = (page - 1) * PAGE_SIZE
+    skip = (page - 1) * page_size
     raw = _public_get(
         "/games",
         _filter_param(
@@ -502,13 +615,13 @@ def games(
                 "where": where,
                 "include": ["surface", "schedule", "group", "teamStats", "officials"],
                 "order": ["startTime ASC", "id DESC"],
-                "limit": PAGE_SIZE,
+                "limit": page_size,
                 "skip": skip,
             }
         ),
     )
     team_ids = {t for g in raw for t in (g.get("homeTeamId"), g.get("awayTeamId")) if t}
-    teams = {}
+    teams: dict[int, dict] = {}
     if team_ids:
         for team in _public_get(
             "/teams",
@@ -516,48 +629,15 @@ def games(
         ):
             teams[team["id"]] = team
 
-    items = []
-    for g in raw:
-        officials = [row for row in (official_row(a) for a in g.get("officials") or []) if row]
-        officials.sort(key=lambda r: (_POSITION_ORDER.get(r["position"], 99), r["name"]))
-        stats = {s.get("teamId"): s for s in (g.get("teamStats") or [])}
-        home = teams.get(g.get("homeTeamId"), {})
-        away = teams.get(g.get("awayTeamId"), {})
-        items.append(
-            {
-                "id": g["id"],
-                "number": g.get("number"),
-                "date": g.get("date"),
-                "startTime": format_local_time(g.get("startTime"), g.get("timezone")),
-                "endTime": format_local_time(g.get("endTime"), g.get("timezone")),
-                "division": g.get("division"),
-                "category": g.get("category"),
-                "gender": g.get("gender"),
-                "status": g.get("status"),
-                "isApproved": g.get("isApproved"),
-                "venue": venue_label(g.get("surface")),
-                "city": city_label(g.get("surface")),
-                "schedule": (g.get("schedule") or {}).get("name"),
-                "scheduleType": (g.get("schedule") or {}).get("type"),
-                "group": (g.get("group") or {}).get("name"),
-                "home": home.get("name") or "TBD",
-                "away": away.get("name") or "TBD",
-                "homeTeamId": g.get("homeTeamId"),
-                "awayTeamId": g.get("awayTeamId"),
-                "homeLogoUrl": home.get("logoUrl"),
-                "awayLogoUrl": away.get("logoUrl"),
-                "homeScore": (stats.get(g.get("homeTeamId")) or {}).get("goalFor"),
-                "awayScore": (stats.get(g.get("awayTeamId")) or {}).get("goalFor"),
-                "officials": officials,
-                "scoresheetUrl": SCORESHEET_URL.format(id=g["id"]),
-            }
-        )
+    items = [serialize_public_game(g, teams) for g in raw]
 
     return {
         "total": total,
         "page": page,
-        "pageSize": PAGE_SIZE,
-        "pages": max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE) if total else 1,
+        "pageSize": page_size,
+        "pages": max(1, (total + page_size - 1) // page_size) if total else 1,
+        "fromDay": from_day,
+        "day": None if from_day else (day or date.today().isoformat()),
         "games": items,
     }
 
@@ -578,6 +658,12 @@ def stats_meta() -> dict:
         conn.close()
 
 
+def _natural_group_key(name: str | None) -> list:
+    """Sort Tier/Flight/Group numbers naturally; colours alphabetically."""
+    text = name or ""
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", text)]
+
+
 @app.get("/api/standings")
 def standings(
     season_id: str = Query("2026-27"),
@@ -593,9 +679,10 @@ def standings(
         if group_key is None:
             rows = conn.execute(
                 """
-                SELECT st.*, t.logo_url AS logoUrl
+                SELECT st.*, t.logo_url AS logoUrl, gr.name AS groupName
                 FROM standings st
                 LEFT JOIN teams t ON t.id = st.team_id
+                LEFT JOIN groups gr ON gr.id = st.group_id
                 WHERE st.season_id=? AND st.schedule_id=?
                 ORDER BY st.pts DESC, st.gd DESC, st.gf DESC, st.team_name ASC
                 """,
@@ -606,9 +693,10 @@ def standings(
         else:
             rows = conn.execute(
                 """
-                SELECT st.*, t.logo_url AS logoUrl
+                SELECT st.*, t.logo_url AS logoUrl, gr.name AS groupName
                 FROM standings st
                 LEFT JOIN teams t ON t.id = st.team_id
+                LEFT JOIN groups gr ON gr.id = st.group_id
                 WHERE st.season_id=? AND st.schedule_id=? AND st.group_id=?
                 ORDER BY st.pts DESC, st.gd DESC, st.gf DESC, st.team_name ASC
                 """,
@@ -616,19 +704,18 @@ def standings(
             ).fetchall()
             groups = [group_key]
 
-        group_names = {}
-        for gid in groups:
-            if not gid:
-                continue
-            g = conn.execute("SELECT name FROM groups WHERE id=?", (gid,)).fetchone()
-            if g:
-                group_names[gid] = g["name"]
-
-        items = []
-        for r in rows:
-            item = dict(r)
-            item["groupName"] = group_names.get(r["group_id"])
-            items.append(item)
+        items = [dict(r) for r in rows]
+        if group_key is None and len(groups) > 1:
+            # Keep standings ordered by group (Tier 1, Tier 2… / Blue, Gold…), then points.
+            items.sort(
+                key=lambda r: (
+                    _natural_group_key(r.get("groupName")),
+                    -(r.get("pts") or 0),
+                    -(r.get("gd") or 0),
+                    -(r.get("gf") or 0),
+                    (r.get("team_name") or "").lower(),
+                )
+            )
 
         return {
             "seasonId": season_id,
@@ -646,6 +733,8 @@ def team_roster(
     team_id: int,
     season_id: str = Query("2026-27"),
     schedule_id: Optional[int] = None,
+    type: Optional[str] = None,
+    scope: Optional[str] = None,
 ) -> dict:
     conn = db()
     try:
@@ -654,18 +743,90 @@ def team_roster(
             # Still allow if we have stats rows
             team = {"id": team_id, "name": f"Team {team_id}", "short_name": None, "office_id": None}
 
+        # Schedules this team appears in for the season (standings, player stats, or games).
+        schedule_rows = conn.execute(
+            """
+            SELECT DISTINCT s.id, s.name, s.type, s.division, s.gender, s.category
+            FROM schedules s
+            WHERE s.id IN (
+              SELECT schedule_id FROM standings
+                WHERE season_id=? AND team_id=? AND schedule_id IS NOT NULL
+              UNION
+              SELECT schedule_id FROM player_stats
+                WHERE season_id=? AND team_id=? AND schedule_id IS NOT NULL
+              UNION
+              SELECT schedule_id FROM games
+                WHERE season_id=? AND is_approved=1 AND schedule_id IS NOT NULL
+                  AND (home_team_id=? OR away_team_id=?)
+            )
+            ORDER BY
+              CASE s.type
+                WHEN 'League' THEN 1
+                WHEN 'Placement' THEN 2
+                WHEN 'Playoffs' THEN 3
+                WHEN 'Exhibition' THEN 4
+                WHEN 'Tournament' THEN 5
+                ELSE 9
+              END,
+              s.name ASC
+            """,
+            (season_id, team_id, season_id, team_id, season_id, team_id, team_id),
+        ).fetchall()
+        schedules = [dict(r) for r in schedule_rows]
+        types = []
+        for s in schedules:
+            t = s.get("type")
+            if t and t not in types:
+                types.append(t)
+
+        # Resolve active schedule filter from schedule_id and/or type.
+        # Default to the team's League schedule (else first available) so roster
+        # points match league standings; callers can pass scope=all to compare everything.
+        scope = (scope or "").strip().lower() if scope else ""
+        active_type = type or None
+        active_schedule_id = schedule_id
+        if scope == "all":
+            active_type = None
+            active_schedule_id = None
+        elif active_schedule_id is not None:
+            match = next((s for s in schedules if s["id"] == active_schedule_id), None)
+            if match and not active_type:
+                active_type = match.get("type")
+        elif active_type:
+            typed = [s for s in schedules if s.get("type") == active_type]
+            if len(typed) == 1:
+                active_schedule_id = typed[0]["id"]
+        elif schedules:
+            preferred = next((s for s in schedules if s.get("type") == "League"), None)
+            pick = preferred or schedules[0]
+            active_schedule_id = pick["id"]
+            active_type = pick.get("type")
+
+        schedule_ids: list[int] | None = None
+        if active_schedule_id is not None:
+            schedule_ids = [active_schedule_id]
+        elif active_type:
+            schedule_ids = [s["id"] for s in schedules if s.get("type") == active_type]
+
+        active_schedule = next(
+            (s for s in schedules if s["id"] == active_schedule_id), None
+        ) if active_schedule_id is not None else None
+
         sql = """
             SELECT * FROM player_stats
             WHERE season_id=? AND team_id=?
         """
         params: list[Any] = [season_id, team_id]
-        if schedule_id is not None:
-            sql += " AND schedule_id=?"
-            params.append(schedule_id)
+        if schedule_ids is not None:
+            placeholders = ",".join("?" * len(schedule_ids))
+            sql += f" AND schedule_id IN ({placeholders})"
+            params.extend(schedule_ids)
         sql += " ORDER BY is_goalie ASC, p DESC, g DESC, player_name ASC"
         players = rows_to_dicts(conn.execute(sql, params).fetchall())
+        # When aggregating across schedules of one type (or All), merge same player.
+        merge_sid = active_schedule_id
         players = merge_duplicate_name_players(
-            conn, players, season_id=season_id, schedule_id=schedule_id
+            conn, players, season_id=season_id, schedule_id=merge_sid
         )
 
         skaters = [
@@ -680,6 +841,7 @@ def team_roster(
         game_sql = """
             SELECT g.*,
                    ht.name AS home_name, at.name AS away_name,
+                   ht.logo_url AS homeLogoUrl, at.logo_url AS awayLogoUrl,
                    s.name AS schedule_name, s.type AS schedule_type,
                    gr.name AS group_name
             FROM games g
@@ -690,9 +852,10 @@ def team_roster(
             WHERE g.season_id=? AND (g.home_team_id=? OR g.away_team_id=?) AND g.is_approved=1
         """
         game_params: list[Any] = [season_id, team_id, team_id]
-        if schedule_id is not None:
-            game_sql += " AND g.schedule_id=?"
-            game_params.append(schedule_id)
+        if schedule_ids is not None:
+            placeholders = ",".join("?" * len(schedule_ids))
+            game_sql += f" AND g.schedule_id IN ({placeholders})"
+            game_params.extend(schedule_ids)
         game_sql += " ORDER BY g.date DESC, g.id DESC LIMIT 40"
         games_rows = []
         for g in conn.execute(game_sql, game_params).fetchall():
@@ -705,18 +868,37 @@ def team_roster(
 
         # Standings snippet for this team
         standings_sql = """
-            SELECT * FROM standings WHERE season_id=? AND team_id=?
+            SELECT st.*, s.name AS schedule_name, s.type AS schedule_type
+            FROM standings st
+            LEFT JOIN schedules s ON s.id = st.schedule_id
+            WHERE st.season_id=? AND st.team_id=?
         """
         st_params: list[Any] = [season_id, team_id]
-        if schedule_id is not None:
-            standings_sql += " AND schedule_id=?"
-            st_params.append(schedule_id)
+        if schedule_ids is not None:
+            placeholders = ",".join("?" * len(schedule_ids))
+            standings_sql += f" AND st.schedule_id IN ({placeholders})"
+            st_params.extend(schedule_ids)
+        standings_sql += """
+            ORDER BY
+              CASE s.type
+                WHEN 'League' THEN 1
+                WHEN 'Placement' THEN 2
+                WHEN 'Playoffs' THEN 3
+                ELSE 9
+              END,
+              st.pts DESC
+        """
         standings_rows = rows_to_dicts(conn.execute(standings_sql, st_params).fetchall())
 
         return {
             "team": dict(team) if not isinstance(team, dict) else team,
             "seasonId": season_id,
-            "scheduleId": schedule_id,
+            "scheduleId": active_schedule_id,
+            "type": active_type,
+            "scope": "all" if scope == "all" else None,
+            "schedule": active_schedule,
+            "schedules": schedules,
+            "types": types,
             "skaters": skaters,
             "goalies": goalies,
             "games": games_rows,
@@ -822,6 +1004,7 @@ def player_page(
                    g.home_score, g.away_score, g.schedule_id,
                    le.team_id, le.number AS sweater, le.positions, le.is_affiliate,
                    ht.name AS home_name, at.name AS away_name,
+                   ht.logo_url AS homeLogoUrl, at.logo_url AS awayLogoUrl,
                    s.name AS schedule_name,
                    (SELECT COUNT(*) FROM goals go WHERE go.game_id=g.id AND go.participant_id=? AND go.team_id=le.team_id) AS g,
                    (SELECT COUNT(*) FROM assists a JOIN goals go ON go.id=a.goal_id
@@ -903,6 +1086,7 @@ def search(
             conn.execute(
                 """
                 SELECT DISTINCT p.participant_id, p.full_name, ps.team_id, t.name AS team_name,
+                       t.logo_url AS logoUrl,
                        ps.schedule_id, s.name AS schedule_name, ps.number, ps.p, ps.gp
                 FROM players p
                 LEFT JOIN player_stats ps ON ps.participant_id = p.participant_id AND ps.season_id=?
@@ -1088,7 +1272,17 @@ def standings_schedules(
         ]
         if not season_id and seasons:
             season_id = seasons[0]
-        default_season = seasons[0] if seasons else season_id
+        if CURRENT_SEASON in seasons:
+            default_season = CURRENT_SEASON
+        else:
+            default_season = seasons[0] if seasons else (season_id or CURRENT_SEASON)
+        # Prefer current season when the client sends the hardcoded Query default
+        # but has not explicitly chosen a prior year yet.
+        if season_id == CURRENT_SEASON or season_id not in seasons:
+            if CURRENT_SEASON in seasons:
+                season_id = CURRENT_SEASON
+            elif seasons:
+                season_id = seasons[0]
 
         sql = """
             SELECT DISTINCT s.id, s.name, s.type, s.division, s.gender, s.category, s.office_id AS officeId,
@@ -1128,6 +1322,9 @@ def standings_schedules(
             gid = r["group_id"]
             if gid and not any(g["id"] == gid for g in by_id[sid]["groups"]):
                 by_id[sid]["groups"].append({"id": gid, "name": r["group_name"] or str(gid)})
+
+        for sched in by_id.values():
+            sched["groups"].sort(key=lambda g: _natural_group_key(g.get("name")))
 
         # Facets from all standings schedules this season (unfiltered), for the dropdowns
         facet_rows = conn.execute(

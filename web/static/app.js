@@ -1,4 +1,5 @@
 const views = {
+  favorites: document.getElementById("view-favorites"),
   schedule: document.getElementById("view-schedule"),
   standings: document.getElementById("view-standings"),
   team: document.getElementById("view-team"),
@@ -13,8 +14,10 @@ const form = document.getElementById("filters");
 const gamesEl = document.getElementById("games");
 const statusEl = document.getElementById("status");
 const pagerEl = document.getElementById("pager");
+const pageSizeEl = document.getElementById("page-size");
 
 const fields = {
+  date_mode: form.elements.date_mode,
   day: form.elements.day,
   season_id: form.elements.season_id,
   office_id: form.elements.office_id,
@@ -28,13 +31,154 @@ const fields = {
 const standingsForm = document.getElementById("standings-filters");
 const leadersForm = document.getElementById("leaders-filters");
 const searchForm = document.getElementById("search-form");
+const teamForm = document.getElementById("team-filters");
+let currentTeamId = null;
 
 let page = 1;
+let pageSize = Number(pageSizeEl?.value) || 25;
 let loading = false;
 let filterData = null;
 let standingsSchedulesCache = [];
 let suppressStandingsEvents = false;
 const sortState = new WeakMap();
+
+const FAVORITES_KEY = "pcaha.favorites.v1";
+const LEGACY_FOLLOWS_KEY = "pcaha.followedTeams.v1";
+
+function normalizeFavorite(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  if (raw.type === "player" || raw.participantId != null) {
+    const participantId = Number(raw.participantId);
+    if (!Number.isFinite(participantId)) return null;
+    return {
+      type: "player",
+      participantId,
+      seasonId: String(raw.seasonId || ""),
+      scheduleId:
+        raw.scheduleId != null && raw.scheduleId !== "" ? Number(raw.scheduleId) : null,
+      teamId: raw.teamId != null && raw.teamId !== "" ? Number(raw.teamId) : null,
+      name: raw.name || "",
+    };
+  }
+  const teamId = Number(raw.teamId);
+  if (!Number.isFinite(teamId)) return null;
+  return {
+    type: "team",
+    teamId,
+    seasonId: String(raw.seasonId || ""),
+    scheduleId:
+      raw.scheduleId != null && raw.scheduleId !== "" ? Number(raw.scheduleId) : null,
+    name: raw.name || "",
+    logoUrl: raw.logoUrl || null,
+  };
+}
+
+function getFavorites() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(FAVORITES_KEY) || "null");
+    if (Array.isArray(raw)) {
+      return raw.map(normalizeFavorite).filter(Boolean);
+    }
+  } catch {
+    /* fall through to legacy */
+  }
+  try {
+    const legacy = JSON.parse(localStorage.getItem(LEGACY_FOLLOWS_KEY) || "[]");
+    if (!Array.isArray(legacy) || !legacy.length) return [];
+    const migrated = legacy
+      .map((f) => normalizeFavorite({ ...f, type: "team" }))
+      .filter(Boolean);
+    setFavorites(migrated);
+    return migrated;
+  } catch {
+    return [];
+  }
+}
+
+function setFavorites(list) {
+  localStorage.setItem(FAVORITES_KEY, JSON.stringify(list));
+}
+
+function favoriteKey(entry) {
+  const f = normalizeFavorite(entry);
+  if (!f) return "";
+  if (f.type === "player") {
+    return `player|${f.seasonId}|${f.participantId}`;
+  }
+  return `team|${f.seasonId}|${f.scheduleId ?? ""}|${f.teamId}`;
+}
+
+function isFavorite(entry) {
+  const key = favoriteKey(entry);
+  return key ? getFavorites().some((f) => favoriteKey(f) === key) : false;
+}
+
+function toggleFavorite(entry) {
+  const normalized = normalizeFavorite(entry);
+  if (!normalized) return false;
+  const list = getFavorites();
+  const key = favoriteKey(normalized);
+  const idx = list.findIndex((f) => favoriteKey(f) === key);
+  if (idx >= 0) {
+    list.splice(idx, 1);
+    setFavorites(list);
+    return false;
+  }
+  list.push(normalized);
+  setFavorites(list);
+  return true;
+}
+
+function favoriteButtonHtml(entry, { size = "" } = {}) {
+  const f = normalizeFavorite(entry);
+  if (!f) return "";
+  const on = isFavorite(f);
+  const label = f.name || (f.type === "player" ? "player" : "team");
+  const verb = on ? "Remove from favorites" : "Add to favorites";
+  if (f.type === "player") {
+    return `<button
+      type="button"
+      class="follow-btn favorite-btn ${on ? "on" : ""} ${size}"
+      data-fav-type="player"
+      data-fav-participant="${escapeHtml(f.participantId)}"
+      data-fav-season="${escapeHtml(f.seasonId)}"
+      data-fav-schedule="${escapeHtml(f.scheduleId ?? "")}"
+      data-fav-team="${escapeHtml(f.teamId ?? "")}"
+      data-fav-name="${escapeHtml(f.name || "")}"
+      aria-pressed="${on ? "true" : "false"}"
+      aria-label="${verb}: ${escapeHtml(label)}"
+      title="${verb}"
+    >★</button>`;
+  }
+  return `<button
+    type="button"
+    class="follow-btn favorite-btn ${on ? "on" : ""} ${size}"
+    data-fav-type="team"
+    data-fav-team="${escapeHtml(f.teamId)}"
+    data-fav-season="${escapeHtml(f.seasonId)}"
+    data-fav-schedule="${escapeHtml(f.scheduleId ?? "")}"
+    data-fav-name="${escapeHtml(f.name || "")}"
+    data-fav-logo="${escapeHtml(f.logoUrl || "")}"
+    aria-pressed="${on ? "true" : "false"}"
+    aria-label="${verb}: ${escapeHtml(label)}"
+    title="${verb}"
+  >★</button>`;
+}
+
+/** @deprecated Use favoriteButtonHtml — kept as alias for call sites during rename. */
+function followButtonHtml(opts) {
+  return favoriteButtonHtml(
+    {
+      type: "team",
+      teamId: opts.teamId,
+      seasonId: opts.seasonId,
+      scheduleId: opts.scheduleId,
+      name: opts.name,
+      logoUrl: opts.logoUrl,
+    },
+    { size: opts.size || "" },
+  );
+}
 
 function fillSelect(select, items, { value, label, blank }) {
   if (!select) return;
@@ -101,7 +245,7 @@ function teamLinkLabel(name, url, href, { size = "md" } = {}) {
 }
 
 function parseHash() {
-  const raw = (location.hash || "#/schedule").replace(/^#\/?/, "");
+  const raw = (location.hash || "#/favorites").replace(/^#\/?/, "");
   const [path, qs] = raw.split("?");
   const parts = path.split("/").filter(Boolean);
   const params = Object.fromEntries(new URLSearchParams(qs || ""));
@@ -115,11 +259,13 @@ function setHash(path, params = {}) {
 
 function showView(name, title) {
   for (const [key, el] of Object.entries(views)) {
-    el.hidden = key !== name;
+    if (el) el.hidden = key !== name;
   }
   pageTitle.textContent = title;
   const standingsFamily = ["standings", "team", "leaders", "player", "search", "game"];
-  const topTab = standingsFamily.includes(name) ? "standings" : "schedule";
+  let topTab = "schedule";
+  if (name === "favorites") topTab = "favorites";
+  else if (standingsFamily.includes(name)) topTab = "standings";
   document.querySelectorAll(".main-nav a").forEach((a) => {
     a.classList.toggle("active", a.dataset.nav === topTab);
   });
@@ -141,11 +287,32 @@ function num(value) {
   return String(value);
 }
 
-function sortableTable(container, columns, rows, { rowClass, onRowClick } = {}) {
+/** Natural sort for group labels: Tier 1/2/3, Flight 1…, and colour names A–Z. */
+function compareGroupNames(a, b) {
+  return String(a || "").localeCompare(String(b || ""), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function sortableTable(container, columns, rows, { rowClass, onRowClick, primaryKey } = {}) {
   const state = sortState.get(container) || { key: columns[0]?.key, dir: "asc" };
   sortState.set(container, state);
 
   const sorted = [...rows].sort((a, b) => {
+    if (primaryKey) {
+      const pa = a[primaryKey];
+      const pb = b[primaryKey];
+      const primaryCmp =
+        primaryKey === "groupName"
+          ? compareGroupNames(pa, pb)
+          : String(pa ?? "").localeCompare(String(pb ?? ""), undefined, {
+              numeric: true,
+              sensitivity: "base",
+            });
+      if (primaryCmp !== 0) return primaryCmp;
+      if (state.key === primaryKey) return 0;
+    }
     const av = a[state.key];
     const bv = b[state.key];
     if (av == null && bv == null) return 0;
@@ -155,14 +322,16 @@ function sortableTable(container, columns, rows, { rowClass, onRowClick } = {}) 
       return state.dir === "asc" ? av - bv : bv - av;
     }
     return state.dir === "asc"
-      ? String(av).localeCompare(String(bv), undefined, { sensitivity: "base" })
-      : String(bv).localeCompare(String(av), undefined, { sensitivity: "base" });
+      ? String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: "base" })
+      : String(bv).localeCompare(String(av), undefined, { numeric: true, sensitivity: "base" });
   });
 
   const head = columns
     .map((c) => {
-      const arrow = state.key === c.key ? (state.dir === "asc" ? " ↑" : " ↓") : "";
-      return `<th data-key="${escapeHtml(c.key)}" class="${c.numeric ? "num" : ""}">${escapeHtml(c.label)}${arrow}</th>`;
+      const arrow = state.key === c.key && c.key !== "follow" && c.key !== "favorite" ? (state.dir === "asc" ? " ↑" : " ↓") : "";
+      const cls = [c.numeric ? "num" : "", c.key === "follow" || c.key === "favorite" ? "follow-cell" : ""].filter(Boolean).join(" ");
+      const title = c.title ? ` title="${escapeHtml(c.title)}"` : "";
+      return `<th data-key="${escapeHtml(c.key)}" class="${cls}"${title}>${escapeHtml(c.label)}${arrow}</th>`;
     })
     .join("");
 
@@ -171,7 +340,8 @@ function sortableTable(container, columns, rows, { rowClass, onRowClick } = {}) 
       const cells = columns
         .map((c) => {
           const raw = c.render ? c.render(row) : escapeHtml(num(row[c.key]));
-          return `<td class="${c.numeric ? "num" : ""}">${raw}</td>`;
+          const cls = [c.numeric ? "num" : "", c.key === "follow" || c.key === "favorite" ? "follow-cell" : ""].filter(Boolean).join(" ");
+          return `<td class="${cls}">${raw}</td>`;
         })
         .join("");
       const cls = rowClass ? rowClass(row, idx) : "";
@@ -180,37 +350,27 @@ function sortableTable(container, columns, rows, { rowClass, onRowClick } = {}) 
     })
     .join("");
 
+  // Always render a real table (horizontally scrollable on narrow screens).
+  // Stacked mobile cards were too tall for multi-column standings/stats.
   container.innerHTML = `
-    <div class="desktop-table">
+    <div class="data-table">
       <table>
         <thead><tr>${head}</tr></thead>
         <tbody>${body || `<tr><td colspan="${columns.length}">No rows</td></tr>`}</tbody>
       </table>
-    </div>
-    <div class="mobile-cards">
-      ${sorted
-        .map((row, idx) => {
-          const lines = columns
-            .map((c) => {
-              const raw = c.render ? c.render(row) : escapeHtml(num(row[c.key]));
-              return `<div><span class="card-label">${escapeHtml(c.label)}</span> ${raw}</div>`;
-            })
-            .join("");
-          return `<article class="stat-card ${onRowClick ? "clickable" : ""}" data-idx="${idx}">${lines}</article>`;
-        })
-        .join("") || `<p class="muted">No rows</p>`}
     </div>
   `;
 
   container.querySelectorAll("th[data-key]").forEach((th) => {
     th.addEventListener("click", () => {
       const key = th.dataset.key;
+      if (!key || key === "follow" || key === "favorite") return;
       if (state.key === key) state.dir = state.dir === "asc" ? "desc" : "asc";
       else {
         state.key = key;
         state.dir = columns.find((c) => c.key === key)?.numeric ? "desc" : "asc";
       }
-      sortableTable(container, columns, rows, { rowClass, onRowClick });
+      sortableTable(container, columns, rows, { rowClass, onRowClick, primaryKey });
     });
   });
 
@@ -305,19 +465,137 @@ function officialChips(officials) {
     .join("");
 }
 
+function gameField(game, snake, camel) {
+  return game[snake] ?? game[camel];
+}
+
+/** Stacked away/home scoreboard — clearer than "2 – 0". */
+function stackedScoreboard(game, { highlightTeamId = null, showNames = true, seasonId = null } = {}) {
+  const awayName = gameField(game, "away_name", "away") || "Away";
+  const homeName = gameField(game, "home_name", "home") || "Home";
+  const awayScore = gameField(game, "away_score", "awayScore");
+  const homeScore = gameField(game, "home_score", "homeScore");
+  const awayId = gameField(game, "away_team_id", "awayTeamId");
+  const homeId = gameField(game, "home_team_id", "homeTeamId");
+  const awayLogo = gameField(game, "awayLogoUrl", "away_logo_url");
+  const homeLogo = gameField(game, "homeLogoUrl", "home_logo_url");
+  const season =
+    seasonId ||
+    gameField(game, "season_id", "seasonId") ||
+    filterData?.defaultSeason ||
+    "2026-27";
+  const hasScore = awayScore != null && homeScore != null;
+  const hid = highlightTeamId != null ? Number(highlightTeamId) : null;
+
+  const row = (name, logo, side, score, teamId) => {
+    const self = hid != null && Number(teamId) === hid;
+    const href =
+      teamId != null
+        ? `#/team/${teamId}?season_id=${encodeURIComponent(season)}`
+        : null;
+    const label = showNames
+      ? teamLinkLabel(name, logo, href, { size: "sm" })
+      : `<span class="team-with-logo">${teamLogo(logo, name, { size: "sm" })}</span>`;
+    return `
+      <div class="scoreboard-row${self ? " is-self" : ""}">
+        <div class="scoreboard-team">${label}</div>
+        <span class="scoreboard-ha">${side}</span>
+        <span class="scoreboard-pts">${hasScore ? escapeHtml(String(score)) : "—"}</span>
+      </div>
+    `;
+  };
+
+  return `
+    <div class="scoreboard${showNames ? "" : " scoreboard-compact"}" aria-label="Score">
+      ${row(awayName, awayLogo, "away", awayScore, awayId)}
+      ${row(homeName, homeLogo, "home", homeScore, homeId)}
+    </div>
+  `;
+}
+
 function scoreline(game) {
   if (game.homeScore == null || game.awayScore == null) return "";
-  return `<div class="score">${game.awayScore} – ${game.homeScore}</div>`;
+  return stackedScoreboard(game, { showNames: false });
+}
+
+function pageNumberItems(current, totalPages) {
+  const cur = Math.max(1, Math.min(current, totalPages));
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, i) => i + 1);
+  }
+  const keep = new Set([1, totalPages, cur]);
+  for (let n = cur - 1; n <= cur + 1; n += 1) {
+    if (n >= 1 && n <= totalPages) keep.add(n);
+  }
+  if (cur <= 3) [2, 3, 4, 5].forEach((n) => keep.add(n));
+  if (cur >= totalPages - 2) {
+    [totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1].forEach((n) => {
+      if (n >= 1) keep.add(n);
+    });
+  }
+  const nums = [...keep].sort((a, b) => a - b);
+  const items = [];
+  for (let i = 0; i < nums.length; i += 1) {
+    if (i > 0 && nums[i] - nums[i - 1] > 1) items.push("…");
+    items.push(nums[i]);
+  }
+  return items;
+}
+
+function renderPager(totalPages, currentPage) {
+  const pages = Math.max(0, Number(totalPages) || 0);
+  const cur = Math.max(1, Math.min(Number(currentPage) || 1, Math.max(pages, 1)));
+
+  if (pages < 1) {
+    pagerEl.hidden = false;
+    pagerEl.innerHTML = `
+      <button type="button" disabled>Prev</button>
+      <button type="button" class="current" disabled>1</button>
+      <button type="button" disabled>Next</button>
+    `;
+    return;
+  }
+
+  if (pages === 1) {
+    pagerEl.hidden = true;
+    pagerEl.innerHTML = "";
+    return;
+  }
+
+  const numbers = pageNumberItems(cur, pages)
+    .map((item) => {
+      if (item === "…") {
+        return `<span class="pager-ellipsis" aria-hidden="true">…</span>`;
+      }
+      const active = item === cur;
+      return `<button type="button" data-page="${item}" class="${
+        active ? "current" : ""
+      }" ${active ? "disabled aria-current=\"page\"" : ""}>${item}</button>`;
+    })
+    .join("");
+
+  pagerEl.hidden = false;
+  pagerEl.innerHTML = `
+    <button type="button" data-page="${cur - 1}" ${cur <= 1 ? "disabled" : ""}>Prev</button>
+    ${numbers}
+    <button type="button" data-page="${cur + 1}" ${cur >= pages ? "disabled" : ""}>Next</button>
+  `;
 }
 
 function renderGames(payload) {
+  const total = Number(payload.total) || 0;
+  const pages = total > 0 ? Number(payload.pages) || 1 : 0;
+  if (page > pages && pages > 0) page = pages;
+
   if (!payload.games.length) {
     gamesEl.innerHTML = "";
     statusEl.textContent = "No games match these filters.";
-    pagerEl.hidden = true;
+    renderPager(0, 1);
     return;
   }
-  statusEl.textContent = `${payload.total} game${payload.total === 1 ? "" : "s"}`;
+  statusEl.textContent = `${total} game${total === 1 ? "" : "s"}${
+    payload.fromDay ? ` from ${payload.fromDay}` : ""
+  }`;
   gamesEl.innerHTML = payload.games
     .map((game) => {
       const when = [game.date, game.startTime && game.endTime ? `${game.startTime} – ${game.endTime}` : game.startTime]
@@ -354,39 +632,34 @@ function renderGames(payload) {
     })
     .join("");
 
-  if (payload.pages > 1) {
-    pagerEl.hidden = false;
-    pagerEl.innerHTML = `
-      <button data-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>Prev</button>
-      <button class="current" disabled>${page} / ${payload.pages}</button>
-      <button data-page="${page + 1}" ${page >= payload.pages ? "disabled" : ""}>Next</button>
-    `;
-  } else {
-    pagerEl.hidden = true;
-  }
+  renderPager(pages, page);
 }
 
 async function loadGames() {
   if (loading) return;
   if (!fields.day.value) {
-    fields.day.value = new Date().toISOString().slice(0, 10);
+    fields.day.value = todayIso();
   }
   loading = true;
-  statusEl.textContent = "Loading games…";
+  const upcoming = fields.date_mode?.value === "upcoming";
+  statusEl.textContent = upcoming ? "Loading upcoming games…" : "Loading games…";
   try {
     const params = query({
-      day: fields.day.value,
+      ...(upcoming ? { from_day: fields.day.value } : { day: fields.day.value }),
+      season_id: fields.season_id.value,
       office_id: fields.office_id.value,
       division: selectedDivisionName(),
       gender: fields.gender.value,
       schedule_id: fields.schedule_id.value,
       group_id: fields.group_id.value,
       page,
+      page_size: pageSize,
     });
     renderGames(await getJson(`/api/games?${params}`));
   } catch (err) {
     statusEl.textContent = `Could not load games: ${err.message}`;
     gamesEl.innerHTML = "";
+    renderPager(0, 1);
   } finally {
     loading = false;
   }
@@ -396,9 +669,19 @@ function standingsTypeSelect(form) {
   return form.querySelector('select[name="type"]');
 }
 
+function standingsGenderLabel(value) {
+  return value;
+}
+
 function scheduleLabel(s) {
   const cat = s.category ? String(s.category) : "";
-  const bits = [s.division, s.type, cat && cat !== s.name ? cat : null, s.name].filter(Boolean);
+  const bits = [
+    s.division,
+    s.gender ? standingsGenderLabel(s.gender) : null,
+    s.type,
+    cat && cat !== s.name ? cat : null,
+    s.name,
+  ].filter(Boolean);
   return bits.join(" · ");
 }
 
@@ -439,6 +722,7 @@ function renderStandingsScheduleList() {
 function standingsHashParams() {
   return {
     season_id: standingsForm.elements.season_id.value,
+    gender: standingsForm.elements.gender?.value || "",
     division: standingsForm.elements.division.value,
     type: standingsTypeSelect(standingsForm)?.value || "",
     schedule_id: standingsForm.elements.schedule_id.value,
@@ -448,9 +732,11 @@ function standingsHashParams() {
 
 async function loadStandingsSchedules({ preserveSchedule = true, autoSelect = true } = {}) {
   const seasonEl = standingsForm.elements.season_id;
+  const genderEl = standingsForm.elements.gender;
   const divisionEl = standingsForm.elements.division;
   const typeEl = standingsTypeSelect(standingsForm);
   let season = seasonEl?.value || "";
+  const gender = genderEl?.value || "";
   const division = divisionEl?.value || "";
   const type = typeEl?.value || "";
   const prevSchedule = preserveSchedule ? standingsForm.elements.schedule_id.value : "";
@@ -460,6 +746,7 @@ async function loadStandingsSchedules({ preserveSchedule = true, autoSelect = tr
   let data = await getJson(
     `/api/standings/schedules?${query({
       season_id: season || undefined,
+      gender,
       division,
       type,
     })}`,
@@ -470,10 +757,11 @@ async function loadStandingsSchedules({ preserveSchedule = true, autoSelect = tr
     data.defaultSeason ||
     seasons[0] ||
     "2026-27";
-  if (resolved !== (data.seasonId || "") && !division && !type) {
+  if (resolved !== (data.seasonId || "") && !gender && !division && !type) {
     data = await getJson(
       `/api/standings/schedules?${query({
         season_id: resolved,
+        gender,
         division,
         type,
       })}`,
@@ -484,6 +772,16 @@ async function loadStandingsSchedules({ preserveSchedule = true, autoSelect = tr
   try {
     fillSelect(seasonEl, data.seasons || seasons, { value: (s) => s, label: (s) => s });
     if (seasonEl) seasonEl.value = resolved;
+
+    const genders = data.genders || [];
+    fillSelect(genderEl, genders, {
+      blank: "All genders",
+      value: (g) => g,
+      label: (g) => standingsGenderLabel(g),
+    });
+    if (gender && genders.includes(gender) && genderEl) {
+      genderEl.value = gender;
+    }
 
     fillSelect(divisionEl, data.divisions || [], {
       blank: "All ages",
@@ -527,7 +825,7 @@ async function loadStandingsSchedules({ preserveSchedule = true, autoSelect = tr
 function updateStandingsGroups() {
   const sid = Number(standingsForm.elements.schedule_id.value);
   const sched = standingsSchedulesCache.find((s) => s.id === sid);
-  const groups = sched?.groups || [];
+  const groups = [...(sched?.groups || [])].sort((a, b) => compareGroupNames(a.name, b.name));
   let blank = "All groups";
   if (!sid) blank = "Select a schedule first";
   else if (!groups.length) blank = "No groups";
@@ -566,66 +864,60 @@ async function loadStandings() {
     }
     status.textContent = `${data.schedule?.name || "Standings"} · ${data.standings.length} teams`;
     const season = standingsForm.elements.season_id.value;
-    sortableTable(
-      table,
-      [
-        {
-          key: "team_name",
-          label: "Team",
-          render: (r) =>
-            teamLinkLabel(
-              r.team_name,
-              r.logoUrl,
-              `#/team/${r.team_id}?season_id=${encodeURIComponent(season)}&schedule_id=${r.schedule_id}`,
-            ),
-        },
-        { key: "gp", label: "GP", numeric: true },
-        { key: "w", label: "W", numeric: true },
-        { key: "l", label: "L", numeric: true },
-        { key: "t", label: "T", numeric: true },
-        { key: "otl", label: "OTL", numeric: true },
-        { key: "pts", label: "PTS", numeric: true },
-        { key: "gf", label: "GF", numeric: true },
-        { key: "ga", label: "GA", numeric: true },
-        { key: "gd", label: "GD", numeric: true },
-        { key: "pim", label: "PIM", numeric: true },
-        { key: "sportsmanship", label: "FP", numeric: true },
-      ],
-      data.standings,
+    const allGroups = !standingsForm.elements.group_id.value;
+    const groupNames = new Set(
+      data.standings.map((r) => r.groupName).filter((n) => n != null && String(n).trim() !== ""),
     );
-    // Default sort by points desc
-    const state = sortState.get(table);
-    if (state) {
-      state.key = "pts";
-      state.dir = "desc";
-      sortableTable(
-        table,
-        [
-          {
-            key: "team_name",
-            label: "Team",
-            render: (r) =>
-              teamLinkLabel(
-                r.team_name,
-                r.logoUrl,
-                `#/team/${r.team_id}?season_id=${encodeURIComponent(season)}&schedule_id=${r.schedule_id}`,
-              ),
-          },
-          { key: "gp", label: "GP", numeric: true },
-          { key: "w", label: "W", numeric: true },
-          { key: "l", label: "L", numeric: true },
-          { key: "t", label: "T", numeric: true },
-          { key: "otl", label: "OTL", numeric: true },
-          { key: "pts", label: "PTS", numeric: true },
-          { key: "gf", label: "GF", numeric: true },
-          { key: "ga", label: "GA", numeric: true },
-          { key: "gd", label: "GD", numeric: true },
-          { key: "pim", label: "PIM", numeric: true },
-          { key: "sportsmanship", label: "FP", numeric: true },
-        ],
-        data.standings,
-      );
-    }
+    const showGroupCol = allGroups && groupNames.size > 1;
+    const cols = [
+      {
+        key: "follow",
+        label: "",
+        render: (r) =>
+          followButtonHtml({
+            teamId: r.team_id,
+            seasonId: season,
+            scheduleId: r.schedule_id,
+            name: r.team_name,
+            logoUrl: r.logoUrl,
+          }),
+      },
+      {
+        key: "team_name",
+        label: "Team",
+        render: (r) =>
+          teamLinkLabel(
+            r.team_name,
+            r.logoUrl,
+            `#/team/${r.team_id}?season_id=${encodeURIComponent(season)}&schedule_id=${r.schedule_id}`,
+          ),
+      },
+      ...(showGroupCol
+        ? [{ key: "groupName", label: "Group", render: (r) => escapeHtml(r.groupName || "—") }]
+        : []),
+      { key: "gp", label: "GP", numeric: true },
+      { key: "w", label: "W", numeric: true },
+      { key: "l", label: "L", numeric: true },
+      { key: "t", label: "T", numeric: true },
+      {
+        key: "sportsmanship",
+        label: "SP",
+        numeric: true,
+        title: "Sportsmanship points",
+      },
+      { key: "pts", label: "PTS", numeric: true },
+      { key: "gf", label: "GF", numeric: true },
+      { key: "ga", label: "GA", numeric: true },
+      { key: "gd", label: "GD", numeric: true },
+      { key: "pim", label: "PIM", numeric: true },
+    ];
+    const state = sortState.get(table) || { key: "pts", dir: "desc" };
+    state.key = "pts";
+    state.dir = "desc";
+    sortState.set(table, state);
+    sortableTable(table, cols, data.standings, {
+      primaryKey: showGroupCol ? "groupName" : undefined,
+    });
   } catch (err) {
     status.textContent = `Could not load standings: ${err.message}`;
     table.innerHTML = "";
@@ -634,35 +926,128 @@ async function loadStandings() {
 
 async function loadTeam(teamId, params) {
   showView("team", "Team");
+  currentTeamId = teamId;
   const status = document.getElementById("team-status");
   status.textContent = "Loading team…";
   try {
+    const season = params.season_id || filterData?.defaultSeason || "2026-27";
+    const wantAll = params.scope === "all";
     const qs = query({
-      season_id: params.season_id || filterData?.defaultSeason || "2026-27",
-      schedule_id: params.schedule_id,
+      season_id: season,
+      schedule_id: wantAll ? "" : params.schedule_id,
+      type: wantAll ? "" : params.type,
+      scope: wantAll ? "all" : "",
     });
     const data = await getJson(`/api/teams/${teamId}/roster?${qs}`);
     const team = data.team;
     pageTitle.textContent = team.name || `Team ${teamId}`;
     status.textContent = "";
-    const st = data.standings[0];
+
+    // Sync URL to the resolved default (League / incoming schedule) once, so
+    // dropdowns reflect what's shown; user can still switch to All to compare.
+    if (
+      !wantAll &&
+      !params.schedule_id &&
+      !params.type &&
+      data.scheduleId != null
+    ) {
+      setHash(`team/${teamId}`, {
+        season_id: season,
+        schedule_id: data.scheduleId,
+        type: data.type || undefined,
+      });
+      return;
+    }
+
+    const schedules = data.schedules || [];
+    const types = data.types || [];
+    const selectedType = wantAll ? "" : params.type || data.type || "";
+    const selectedScheduleId = wantAll
+      ? ""
+      : params.schedule_id != null && params.schedule_id !== ""
+        ? String(params.schedule_id)
+        : data.scheduleId != null
+          ? String(data.scheduleId)
+          : "";
+
+    fillSelect(teamForm.elements.type, types, {
+      blank: "All types",
+      value: (t) => t,
+      label: (t) => t,
+    });
+    teamForm.elements.type.value =
+      selectedType && types.includes(selectedType) ? selectedType : "";
+
+    const typeFilter = teamForm.elements.type.value;
+    const scheduleOptions = typeFilter
+      ? schedules.filter((s) => s.type === typeFilter)
+      : schedules;
+    fillSelect(teamForm.elements.schedule_id, scheduleOptions, {
+      blank: typeFilter ? `All ${typeFilter} schedules` : "All schedules",
+      value: (s) => s.id,
+      label: (s) => `${s.type || "Schedule"} · ${s.name}`,
+    });
+    if (
+      selectedScheduleId &&
+      [...teamForm.elements.schedule_id.options].some((o) => o.value === selectedScheduleId)
+    ) {
+      teamForm.elements.schedule_id.value = selectedScheduleId;
+    } else {
+      teamForm.elements.schedule_id.value = "";
+    }
+
+    const st = (data.standings || [])[0];
+    const scheduleId = wantAll ? "" : data.scheduleId ?? params.schedule_id ?? "";
+    const scheduleLabel = wantAll
+      ? "All schedules"
+      : data.schedule
+        ? `${data.schedule.type || ""} · ${data.schedule.name}`.replace(/^\s·\s/, "").trim()
+        : selectedType
+          ? `All ${selectedType}`
+          : "All schedules";
+    const record = st
+      ? `${st.gp} GP · ${st.pts} PTS · ${st.w}-${st.l}-${st.t}${st.sportsmanship != null ? ` · ${st.sportsmanship} SP` : ""}`
+      : "";
     document.getElementById("team-header").innerHTML = `
       <p class="meta">
         <a href="#/standings">← Standings</a>
-        ${st ? ` · ${st.gp} GP · ${st.pts} PTS · ${st.w}-${st.l}-${st.t}` : ""}
+        · ${escapeHtml(scheduleLabel)}
+        ${record ? ` · ${escapeHtml(record)}` : ""}
       </p>
-      <h2 class="team-heading">${teamLogo(team.logo_url || team.logoUrl, team.name, { size: "lg" })}<span>${escapeHtml(team.name || "")}</span></h2>
+      <div class="team-heading-row">
+        ${followButtonHtml({
+          teamId,
+          seasonId: data.seasonId || season,
+          scheduleId,
+          name: team.name,
+          logoUrl: team.logo_url || team.logoUrl,
+          size: "lg",
+        })}
+        <h2 class="team-heading">${teamLogo(team.logo_url || team.logoUrl, team.name, { size: "lg" })}<span>${escapeHtml(team.name || "")}</span></h2>
+      </div>
     `;
 
-    const season = data.seasonId;
     const skatersEl = document.getElementById("team-skaters");
     const skaterCols = [
+      {
+        key: "favorite",
+        label: "",
+        render: (r) =>
+          favoriteButtonHtml({
+            type: "player",
+            participantId: r.participant_id,
+            seasonId: data.seasonId || season,
+            scheduleId: r.schedule_id || scheduleId,
+            teamId,
+            name: r.player_name,
+          }),
+      },
       { key: "number", label: "#", render: (r) => escapeHtml(r.number_display || r.number || "—") },
       {
         key: "player_name",
         label: "Name",
         render: (r) =>
-          `<a href="#/player/${r.participant_id}?season_id=${encodeURIComponent(season)}&schedule_id=${r.schedule_id}">${escapeHtml(titleCase(r.player_name))}</a>${
+          `<a href="#/player/${r.participant_id}?season_id=${encodeURIComponent(data.seasonId || season)}&schedule_id=${r.schedule_id || scheduleId}">${escapeHtml(titleCase(r.player_name))}</a>${
             r.is_affiliate ? ' <span class="tag">AP</span>' : ""
           }`,
       },
@@ -677,16 +1062,28 @@ async function loadTeam(teamId, params) {
       { key: "gwg", label: "GWG", numeric: true },
     ];
     sortState.set(skatersEl, { key: "p", dir: "desc" });
-    sortableTable(skatersEl, skaterCols, data.skaters);
 
     const goaliesEl = document.getElementById("team-goalies");
     const goalieCols = [
+      {
+        key: "favorite",
+        label: "",
+        render: (r) =>
+          favoriteButtonHtml({
+            type: "player",
+            participantId: r.participant_id,
+            seasonId: data.seasonId || season,
+            scheduleId: r.schedule_id || scheduleId,
+            teamId,
+            name: r.player_name,
+          }),
+      },
       { key: "number", label: "#", render: (r) => escapeHtml(r.number_display || r.number || "—") },
       {
         key: "player_name",
         label: "Name",
         render: (r) =>
-          `<a href="#/player/${r.participant_id}?season_id=${encodeURIComponent(season)}">${escapeHtml(titleCase(r.player_name))}</a>`,
+          `<a href="#/player/${r.participant_id}?season_id=${encodeURIComponent(data.seasonId || season)}">${escapeHtml(titleCase(r.player_name))}</a>`,
       },
       { key: "goalie_gp", label: "GP", numeric: true },
       { key: "goalie_w", label: "W", numeric: true },
@@ -696,29 +1093,28 @@ async function loadTeam(teamId, params) {
       { key: "gaa", label: "GAA", numeric: true },
     ];
     sortState.set(goaliesEl, { key: "goalie_w", dir: "desc" });
-    sortableTable(goaliesEl, goalieCols, data.goalies);
+
+    if (!(data.skaters || []).length && !(data.goalies || []).length) {
+      const note =
+        (data.games || []).length > 0
+          ? `<p class="muted">Roster stats aren’t loaded for this season yet — standings/games are in, player sheets are still downloading.</p>`
+          : `<p class="muted">No roster data yet.</p>`;
+      skatersEl.innerHTML = note;
+      goaliesEl.innerHTML = "";
+    } else {
+      sortableTable(skatersEl, skaterCols, data.skaters);
+      sortableTable(goaliesEl, goalieCols, data.goalies);
+    }
 
     document.getElementById("team-games").innerHTML = data.games
-      .map((g) => {
-        const opponent =
-          g.home_team_id === Number(teamId)
-            ? `vs ${g.away_name || "TBD"}`
-            : `@ ${g.home_name || "TBD"}`;
-        return `
-          <article class="game compact">
-            <div>
-              <div class="meta">${escapeHtml(g.date)} · ${escapeHtml(g.number || "")} · ${escapeHtml(g.schedule_name || "")}</div>
-              <div class="title">${escapeHtml(opponent)}</div>
-            </div>
-            <div class="side">
-              <div class="score">${g.away_score ?? "—"} – ${g.home_score ?? "—"}</div>
-              <a class="sheet" href="#/game/${g.id}">Recap</a>
-              <a class="sheet ghost" href="${escapeHtml(g.scoresheetUrl)}" target="_blank" rel="noreferrer">PDF</a>
-            </div>
-          </article>
-        `;
-      })
+      .map((g) => renderCompactGameCard(g, { highlightTeamId: teamId, seasonId: data.seasonId || season }))
       .join("") || `<p class="muted">No approved games yet.</p>`;
+
+    await loadTeamFutureGames(teamId, {
+      seasonId: data.seasonId || season,
+      scheduleId: wantAll ? "" : data.scheduleId || params.schedule_id || "",
+      teamName: team.name,
+    });
   } catch (err) {
     status.textContent = `Could not load team: ${err.message}`;
   }
@@ -780,6 +1176,19 @@ async function loadLeaders() {
       return wrap;
     }
 
+    const favCol = {
+      key: "favorite",
+      label: "",
+      render: (r) =>
+        favoriteButtonHtml({
+          type: "player",
+          participantId: r.participant_id,
+          seasonId: season,
+          scheduleId: r.schedule_id,
+          teamId: r.team_id,
+          name: r.player_name,
+        }),
+    };
     const nameCol = {
       key: "player_name",
       label: "Player",
@@ -802,12 +1211,12 @@ async function loadLeaders() {
 
     root.innerHTML = "";
     root.append(
-      board("Points", data.points, [nameCol, teamCol, { key: "gp", label: "GP", numeric: true }, { key: "g", label: "G", numeric: true }, { key: "a", label: "A", numeric: true }, { key: "p", label: "P", numeric: true }]),
-      board("Goals", data.goals, [nameCol, teamCol, { key: "g", label: "G", numeric: true }, { key: "p", label: "P", numeric: true }]),
-      board("Assists", data.assists, [nameCol, teamCol, { key: "a", label: "A", numeric: true }, { key: "p", label: "P", numeric: true }]),
-      board("Penalty minutes", data.pim, [nameCol, teamCol, { key: "pim", label: "PIM", numeric: true }]),
-      board("Goalie wins", data.goalies, [nameCol, teamCol, { key: "goalie_gp", label: "GP", numeric: true }, { key: "goalie_w", label: "W", numeric: true }, { key: "goalie_l", label: "L", numeric: true }, { key: "gaa", label: "GAA", numeric: true }]),
-      board("Goals against avg (min 2 GP)", data.gaa, [nameCol, teamCol, { key: "goalie_gp", label: "GP", numeric: true }, { key: "ga", label: "GA", numeric: true }, { key: "gaa", label: "GAA", numeric: true }]),
+      board("Points", data.points, [favCol, nameCol, teamCol, { key: "gp", label: "GP", numeric: true }, { key: "g", label: "G", numeric: true }, { key: "a", label: "A", numeric: true }, { key: "p", label: "P", numeric: true }]),
+      board("Goals", data.goals, [favCol, nameCol, teamCol, { key: "g", label: "G", numeric: true }, { key: "p", label: "P", numeric: true }]),
+      board("Assists", data.assists, [favCol, nameCol, teamCol, { key: "a", label: "A", numeric: true }, { key: "p", label: "P", numeric: true }]),
+      board("Penalty minutes", data.pim, [favCol, nameCol, teamCol, { key: "pim", label: "PIM", numeric: true }]),
+      board("Goalie wins", data.goalies, [favCol, nameCol, teamCol, { key: "goalie_gp", label: "GP", numeric: true }, { key: "goalie_w", label: "W", numeric: true }, { key: "goalie_l", label: "L", numeric: true }, { key: "gaa", label: "GAA", numeric: true }]),
+      board("Goals against avg (min 2 GP)", data.gaa, [favCol, nameCol, teamCol, { key: "goalie_gp", label: "GP", numeric: true }, { key: "ga", label: "GA", numeric: true }, { key: "gaa", label: "GAA", numeric: true }]),
     );
   } catch (err) {
     status.textContent = `Could not load leaders: ${err.message}`;
@@ -827,9 +1236,23 @@ async function loadPlayer(participantId, params) {
     const data = await getJson(`/api/players/${participantId}?${qs}`);
     pageTitle.textContent = data.player.displayName || data.player.full_name;
     status.textContent = "";
+    const seasonId = data.seasonId || params.season_id || "2026-27";
     document.getElementById("player-header").innerHTML = `
       <p class="meta"><a href="#/search">← Search</a> · Point streak: ${data.pointStreak} game${data.pointStreak === 1 ? "" : "s"}</p>
-      <h2>${escapeHtml(data.player.displayName || data.player.full_name)}</h2>
+      <div class="team-heading-row">
+        ${favoriteButtonHtml(
+          {
+            type: "player",
+            participantId,
+            seasonId,
+            scheduleId: params.schedule_id || null,
+            teamId: (data.stats || [])[0]?.team_id || null,
+            name: data.player.displayName || data.player.full_name,
+          },
+          { size: "lg" },
+        )}
+        <h2>${escapeHtml(data.player.displayName || data.player.full_name)}</h2>
+      </div>
     `;
     document.getElementById("player-splits").innerHTML = `
       <div class="split"><span class="card-label">Home</span> ${data.splits.home.gp} GP · ${data.splits.home.g}-${data.splits.home.a}-${data.splits.home.p} · ${data.splits.home.pim} PIM</div>
@@ -842,7 +1265,14 @@ async function loadPlayer(participantId, params) {
           key: "team_name",
           label: "Team",
           render: (r) =>
-            `<a href="#/team/${r.team_id}?season_id=${encodeURIComponent(data.seasonId)}&schedule_id=${r.schedule_id}">${escapeHtml(r.team_name || "")}</a>`,
+            r.team_id
+              ? teamLinkLabel(
+                  r.team_name,
+                  r.logoUrl,
+                  `#/team/${r.team_id}?season_id=${encodeURIComponent(data.seasonId)}&schedule_id=${r.schedule_id}`,
+                  { size: "sm" },
+                )
+              : "",
         },
         { key: "gp", label: "GP", numeric: true },
         { key: "g", label: "G", numeric: true },
@@ -862,8 +1292,12 @@ async function loadPlayer(participantId, params) {
         {
           key: "matchup",
           label: "Game",
-          render: (r) =>
-            `<a href="#/game/${r.game_id}">${escapeHtml(r.isHome ? `vs ${r.away_name}` : `@ ${r.home_name}`)}</a>`,
+          render: (r) => {
+            const oppName = r.isHome ? r.away_name : r.home_name;
+            const oppLogo = r.isHome ? r.awayLogoUrl : r.homeLogoUrl;
+            const prefix = r.isHome ? "vs" : "@";
+            return `<a class="team-with-logo" href="#/game/${r.game_id}"><span class="vs-prefix">${prefix}</span>${teamLogo(oppLogo, oppName, { size: "sm" })}<span class="team-name">${escapeHtml(oppName || "TBD")}</span></a>`;
+          },
         },
         { key: "g", label: "G", numeric: true },
         { key: "a", label: "A", numeric: true },
@@ -921,10 +1355,34 @@ async function loadSearch(params = {}) {
             data.players
               .map(
                 (p) => `
-              <a class="result" href="#/player/${p.participant_id}?season_id=${encodeURIComponent(season)}${p.schedule_id ? `&schedule_id=${p.schedule_id}` : ""}">
-                <strong>${escapeHtml(p.displayName || titleCase(p.full_name))}</strong>
-                <span>${escapeHtml(p.team_name || "")}${p.p != null ? ` · ${p.p} pts` : ""}</span>
-              </a>`,
+              <div class="result result-with-fav">
+                ${favoriteButtonHtml({
+                  type: "player",
+                  participantId: p.participant_id,
+                  seasonId: season,
+                  scheduleId: p.schedule_id,
+                  teamId: p.team_id,
+                  name: p.displayName || p.full_name,
+                })}
+                <div class="result-body">
+                  <a href="#/player/${p.participant_id}?season_id=${encodeURIComponent(season)}${p.schedule_id ? `&schedule_id=${p.schedule_id}` : ""}">
+                    <strong>${escapeHtml(p.displayName || titleCase(p.full_name))}</strong>
+                  </a>
+                  <div class="result-meta">
+                    ${
+                      p.team_id
+                        ? teamLinkLabel(
+                            p.team_name,
+                            p.logoUrl,
+                            `#/team/${p.team_id}?season_id=${encodeURIComponent(season)}${p.schedule_id ? `&schedule_id=${p.schedule_id}` : ""}`,
+                            { size: "sm" },
+                          )
+                        : `<span class="muted">No team</span>`
+                    }
+                    ${p.p != null ? `<span class="muted">· ${p.p} pts</span>` : ""}
+                  </div>
+                </div>
+              </div>`,
               )
               .join("") || `<p class="muted">No players</p>`
           }
@@ -937,10 +1395,20 @@ async function loadSearch(params = {}) {
             data.teams
               .map(
                 (t) => `
-              <a class="result" href="#/team/${t.id}?season_id=${encodeURIComponent(season)}${t.schedule_id ? `&schedule_id=${t.schedule_id}` : ""}">
-                <strong class="team-with-logo">${teamLogo(t.logoUrl, t.name, { size: "sm" })}<span class="team-name">${escapeHtml(t.name)}</span></strong>
-                <span>${escapeHtml(t.schedule_name || "")}${t.pts != null ? ` · ${t.pts} pts` : ""}</span>
-              </a>`,
+              <div class="result result-with-fav">
+                ${favoriteButtonHtml({
+                  type: "team",
+                  teamId: t.id,
+                  seasonId: season,
+                  scheduleId: t.schedule_id,
+                  name: t.name,
+                  logoUrl: t.logoUrl,
+                })}
+                <a href="#/team/${t.id}?season_id=${encodeURIComponent(season)}${t.schedule_id ? `&schedule_id=${t.schedule_id}` : ""}">
+                  <strong class="team-with-logo">${teamLogo(t.logoUrl, t.name, { size: "sm" })}<span class="team-name">${escapeHtml(t.name)}</span></strong>
+                  <span>${escapeHtml(t.schedule_name || "")}${t.pts != null ? ` · ${t.pts} pts` : ""}</span>
+                </a>
+              </div>`,
               )
               .join("") || `<p class="muted">No teams</p>`
           }
@@ -1001,8 +1469,15 @@ async function loadGame(gameId) {
         {
           key: "team_id",
           label: "Team",
-          render: (r) =>
-            escapeHtml(r.team_id === g.home_team_id ? g.home_name : g.away_name),
+          render: (r) => {
+            const isHome = r.team_id === g.home_team_id;
+            return teamLinkLabel(
+              isHome ? g.home_name : g.away_name,
+              isHome ? g.homeLogoUrl : g.awayLogoUrl,
+              `#/team/${r.team_id}?season_id=${encodeURIComponent(g.season_id || "2026-27")}`,
+              { size: "sm" },
+            );
+          },
         },
       ],
       data.goals,
@@ -1030,10 +1505,19 @@ async function loadGame(gameId) {
     lineups.innerHTML = ["away", "home"]
       .map((side) => {
         const title = side === "home" ? g.home_name : g.away_name;
+        const logo = side === "home" ? g.homeLogoUrl : g.awayLogoUrl;
+        const teamId = side === "home" ? g.home_team_id : g.away_team_id;
         const members = data.lineups[side] || [];
         return `
           <div>
-            <h3 class="section-title">${escapeHtml(title || side)}</h3>
+            <h3 class="section-title">${teamLinkLabel(
+              title || side,
+              logo,
+              teamId
+                ? `#/team/${teamId}?season_id=${encodeURIComponent(g.season_id || "2026-27")}`
+                : null,
+              { size: "md" },
+            )} <span class="scoreboard-ha">${side}</span></h3>
             <div class="table-wrap" data-side="${side}"></div>
           </div>
         `;
@@ -1066,6 +1550,392 @@ function isStandingsFamily(view) {
   return ["standings", "team", "leaders", "player", "search", "game"].includes(view);
 }
 
+function todayIso() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function isoToMmDdYyyy(iso) {
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return "";
+  return `${m[2]}/${m[3]}/${m[1]}`;
+}
+
+function csvEscape(value) {
+  const s = String(value ?? "");
+  if (/[",\n\r]/.test(s)) return `"${s.replaceAll('"', '""')}"`;
+  return s;
+}
+
+/** TeamSnap team schedule import columns (instructional first column omitted). */
+const TEAMSNAP_HEADERS = [
+  "Date",
+  "Time",
+  "Duration (HH:MM)",
+  "Arrival Time (Minutes)",
+  "Name",
+  "Opponent Name",
+  "Opponent Contact Name",
+  "Opponent Contact Phone Number",
+  "Opponent Contact E-mail Address",
+  "Location Name",
+  "Location Address",
+  "Location Details",
+  "Location URL",
+  "Home or Away",
+  "Uniform",
+  "Extra Label",
+  "Notes",
+];
+
+function gameToTeamsnapRow(game, teamId) {
+  const tid = Number(teamId);
+  const isHome = Number(game.homeTeamId) === tid;
+  const opponent = isHome ? game.away : game.home;
+  const notes = [game.scheduleType, game.schedule, game.group, game.number]
+    .filter(Boolean)
+    .join(" · ");
+  return [
+    isoToMmDdYyyy(game.date),
+    game.startTime || "",
+    game.duration || "1:15",
+    "30",
+    "",
+    opponent || "",
+    "",
+    "",
+    "",
+    game.venueName || game.venue || "",
+    game.venueAddress || "",
+    game.locationDetails || "",
+    "",
+    isHome ? "h" : "a",
+    "",
+    game.number || "",
+    notes,
+  ];
+}
+
+function downloadTeamsnapCsv(games, teamId, teamName) {
+  const rows = (games || []).map((g) => gameToTeamsnapRow(g, teamId));
+  const lines = [
+    TEAMSNAP_HEADERS.map(csvEscape).join(","),
+    ...rows.map((r) => r.map(csvEscape).join(",")),
+  ];
+  const blob = new Blob([lines.join("\r\n") + "\r\n"], {
+    type: "text/csv;charset=utf-8",
+  });
+  const slug = String(teamName || "team")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 40);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${slug || "team"}-teamsnap-schedule.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+async function fetchAllPublicGames(baseParams) {
+  const pageSize = 100;
+  let pageNum = 1;
+  let pages = 1;
+  const all = [];
+  while (pageNum <= pages) {
+    const data = await getJson(
+      `/api/games?${query({ ...baseParams, page: pageNum, page_size: pageSize })}`,
+    );
+    all.push(...(data.games || []));
+    pages = data.pages || 1;
+    pageNum += 1;
+    if (pageNum > 20) break; // safety: max 2000 games
+  }
+  return all;
+}
+
+function renderCompactGameCard(g, { highlightTeamId, seasonId } = {}) {
+  const when = [g.date, g.startTime && g.endTime ? `${g.startTime} – ${g.endTime}` : g.startTime]
+    .filter(Boolean)
+    .join(" · ");
+  const league = [g.scheduleType || g.schedule_type, g.schedule || g.schedule_name, g.group || g.group_name]
+    .filter(Boolean)
+    .join(" · ");
+  const venue = [g.venue, g.city].filter(Boolean).join(" · ");
+  const scoreboardGame = {
+    ...g,
+    away_name: g.away_name || g.away,
+    home_name: g.home_name || g.home,
+    away_score: g.away_score ?? g.awayScore,
+    home_score: g.home_score ?? g.homeScore,
+    away_team_id: g.away_team_id ?? g.awayTeamId,
+    home_team_id: g.home_team_id ?? g.homeTeamId,
+    awayLogoUrl: g.awayLogoUrl,
+    homeLogoUrl: g.homeLogoUrl,
+  };
+  return `
+    <article class="game compact">
+      <div>
+        <div class="meta">${escapeHtml(when)}${g.number ? ` · ${escapeHtml(g.number)}` : ""}${
+          league ? ` · ${escapeHtml(league)}` : ""
+        }</div>
+        ${stackedScoreboard(scoreboardGame, {
+          highlightTeamId,
+          seasonId,
+        })}
+        ${venue ? `<div class="venue">${escapeHtml(venue)}</div>` : ""}
+      </div>
+      <div class="side">
+        <a class="sheet" href="#/game/${g.id}">Recap</a>
+        <a class="sheet ghost" href="${escapeHtml(g.scoresheetUrl)}" target="_blank" rel="noreferrer">PDF</a>
+      </div>
+    </article>
+  `;
+}
+
+let teamFutureGamesCache = [];
+let teamFutureExportCtx = null;
+
+async function loadTeamFutureGames(teamId, { seasonId, scheduleId, teamName } = {}) {
+  const listEl = document.getElementById("team-future-games");
+  const status = document.getElementById("team-future-status");
+  const exportBtn = document.getElementById("team-teamsnap-export");
+  if (!listEl) return;
+  status.textContent = "Loading future games…";
+  exportBtn.hidden = true;
+  teamFutureGamesCache = [];
+  teamFutureExportCtx = { teamId, teamName };
+  try {
+    const games = await fetchAllPublicGames({
+      from_day: todayIso(),
+      team_id: teamId,
+      season_id: seasonId,
+      schedule_id: scheduleId || undefined,
+    });
+    teamFutureGamesCache = games;
+    if (!games.length) {
+      status.textContent = "";
+      listEl.innerHTML = `<p class="muted">No upcoming games found for this filter.</p>`;
+      return;
+    }
+    status.textContent = `${games.length} upcoming game${games.length === 1 ? "" : "s"}`;
+    listEl.innerHTML = games
+      .map((g) => renderCompactGameCard(g, { highlightTeamId: teamId, seasonId }))
+      .join("");
+    exportBtn.hidden = false;
+  } catch (err) {
+    status.textContent = `Could not load future games: ${err.message}`;
+    listEl.innerHTML = "";
+  }
+}
+
+function pickLastAndNextGame(games) {
+  const today = todayIso();
+  const sorted = [...(games || [])].sort((a, b) => {
+    const d = String(a.date).localeCompare(String(b.date));
+    return d !== 0 ? d : Number(a.id) - Number(b.id);
+  });
+  const pastOrToday = sorted.filter((g) => String(g.date) <= today);
+  const future = sorted.filter((g) => String(g.date) > today);
+  const last = pastOrToday.length ? pastOrToday[pastOrToday.length - 1] : null;
+  let next = future.length ? future[0] : null;
+  if (!next && last && String(last.date) === today) next = last;
+  return { last, next };
+}
+
+function formatFollowedGame(g, teamId) {
+  if (!g) return `<div class="muted">—</div>`;
+  const hasScore = g.home_score != null && g.away_score != null;
+  return `
+    <div class="meta">${escapeHtml(g.date)}${g.number ? ` · ${escapeHtml(g.number)}` : ""}</div>
+    ${stackedScoreboard(g, { highlightTeamId: teamId })}
+    ${hasScore ? "" : `<div class="muted">Scheduled</div>`}
+    <a href="#/game/${g.id}">Recap</a>
+  `;
+}
+
+async function loadFavorites() {
+  showView("favorites", "Favorites");
+  const status = document.getElementById("favorites-status");
+  const list = document.getElementById("favorites-list");
+  const favorites = getFavorites();
+  const teams = favorites.filter((f) => f.type === "team");
+  const players = favorites.filter((f) => f.type === "player");
+  if (!favorites.length) {
+    status.textContent = "";
+    list.innerHTML = `
+      <div class="favorites-empty">
+        <h2>Save your favorites</h2>
+        <p>Tap the star on any team or player. Favorites stay on this device — no account needed.</p>
+        <div class="favorites-empty-actions">
+          <a class="btn-link" href="#/standings">Browse standings</a>
+          <a class="btn-link secondary" href="#/search">Search players</a>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  status.textContent = `Loading ${favorites.length} favorite${favorites.length === 1 ? "" : "s"}…`;
+  list.innerHTML = "";
+
+  const teamCards = await Promise.all(
+    teams.map(async (f) => {
+      try {
+        const qs = query({
+          season_id: f.seasonId,
+          schedule_id: f.scheduleId,
+        });
+        const data = await getJson(`/api/teams/${f.teamId}/roster?${qs}`);
+        const team = data.team || { id: f.teamId, name: f.name, logo_url: f.logoUrl };
+        const st = (data.standings || [])[0];
+        const { last, next } = pickLastAndNextGame(data.games || []);
+        const teamHref = `#/team/${f.teamId}?${query({
+          season_id: f.seasonId,
+          schedule_id: f.scheduleId,
+        })}`;
+        const standingsHref = `#/standings?${query({
+          season_id: f.seasonId,
+          schedule_id: f.scheduleId,
+        })}`;
+        return `
+          <article class="favorite-card">
+            <div class="favorite-card-top">
+              <div>
+                ${teamLinkLabel(team.name || f.name, team.logo_url || team.logoUrl || f.logoUrl, teamHref, { size: "lg" })}
+                <div class="favorite-meta">
+                  Team · ${escapeHtml(f.seasonId)}${st ? ` · ${st.gp} GP · ${st.pts} PTS · ${st.w}-${st.l}-${st.t}` : ""}
+                </div>
+              </div>
+              ${favoriteButtonHtml({ ...f, name: team.name || f.name, logoUrl: team.logo_url || team.logoUrl || f.logoUrl }, { size: "lg" })}
+            </div>
+            <div class="favorite-games">
+              <div class="favorite-game">
+                <div class="label">Last game</div>
+                ${formatFollowedGame(last, f.teamId)}
+              </div>
+              <div class="favorite-game">
+                <div class="label">Next / today</div>
+                ${formatFollowedGame(next, f.teamId)}
+              </div>
+            </div>
+            <div class="favorite-actions">
+              <a href="${teamHref}">Roster &amp; stats</a>
+              <a href="${standingsHref}">League table</a>
+            </div>
+          </article>
+        `;
+      } catch (err) {
+        return `
+          <article class="favorite-card">
+            <div class="favorite-card-top">
+              <div>
+                <strong>${escapeHtml(f.name || `Team ${f.teamId}`)}</strong>
+                <div class="favorite-meta">Team · ${escapeHtml(f.seasonId)} · could not load (${escapeHtml(err.message)})</div>
+              </div>
+              ${favoriteButtonHtml(f, { size: "lg" })}
+            </div>
+          </article>
+        `;
+      }
+    }),
+  );
+
+  const playerCards = await Promise.all(
+    players.map(async (f) => {
+      try {
+        const qs = query({
+          season_id: f.seasonId,
+          schedule_id: f.scheduleId,
+        });
+        const data = await getJson(`/api/players/${f.participantId}?${qs}`);
+        const name = data.player.displayName || data.player.full_name || f.name;
+        const st = (data.stats || [])[0];
+        const totals = (data.stats || []).reduce(
+          (acc, r) => {
+            acc.gp += r.gp || 0;
+            acc.g += r.g || 0;
+            acc.a += r.a || 0;
+            acc.p += r.p || 0;
+            acc.pim += r.pim || 0;
+            return acc;
+          },
+          { gp: 0, g: 0, a: 0, p: 0, pim: 0 },
+        );
+        const playerHref = `#/player/${f.participantId}?${query({
+          season_id: f.seasonId,
+          schedule_id: f.scheduleId,
+        })}`;
+        const teamHref = st
+          ? `#/team/${st.team_id}?${query({
+              season_id: f.seasonId,
+              schedule_id: st.schedule_id,
+            })}`
+          : "";
+        return `
+          <article class="favorite-card">
+            <div class="favorite-card-top">
+              <div>
+                <a class="favorite-player-name" href="${playerHref}">${escapeHtml(titleCase(name))}</a>
+                <div class="favorite-meta">
+                  Player · ${escapeHtml(f.seasonId)}
+                  ${totals.gp ? ` · ${totals.gp} GP · ${totals.g}-${totals.a}-${totals.p} · ${totals.pim} PIM` : ""}
+                  ${data.pointStreak ? ` · ${data.pointStreak}-game point streak` : ""}
+                </div>
+                ${st?.team_name
+                  ? `<div class="favorite-meta">${teamLinkLabel(
+                      st.team_name,
+                      st.logoUrl,
+                      teamHref ||
+                        `#/team/${st.team_id}?season_id=${encodeURIComponent(f.seasonId)}${
+                          st.schedule_id ? `&schedule_id=${st.schedule_id}` : ""
+                        }`,
+                      { size: "sm" },
+                    )}</div>`
+                  : ""}
+              </div>
+              ${favoriteButtonHtml({ ...f, name }, { size: "lg" })}
+            </div>
+            <div class="favorite-actions">
+              <a href="${playerHref}">Player page</a>
+              ${teamHref ? `<a href="${teamHref}">Team</a>` : ""}
+            </div>
+          </article>
+        `;
+      } catch (err) {
+        return `
+          <article class="favorite-card">
+            <div class="favorite-card-top">
+              <div>
+                <strong>${escapeHtml(titleCase(f.name) || `Player ${f.participantId}`)}</strong>
+                <div class="favorite-meta">Player · ${escapeHtml(f.seasonId)} · could not load (${escapeHtml(err.message)})</div>
+              </div>
+              ${favoriteButtonHtml(f, { size: "lg" })}
+            </div>
+          </article>
+        `;
+      }
+    }),
+  );
+
+  const sections = [];
+  if (teamCards.length) {
+    sections.push(`<h2 class="favorites-section-title">Teams</h2><div class="favorites-grid">${teamCards.join("")}</div>`);
+  }
+  if (playerCards.length) {
+    sections.push(`<h2 class="favorites-section-title">Players</h2><div class="favorites-grid">${playerCards.join("")}</div>`);
+  }
+  const bits = [];
+  if (teams.length) bits.push(`${teams.length} team${teams.length === 1 ? "" : "s"}`);
+  if (players.length) bits.push(`${players.length} player${players.length === 1 ? "" : "s"}`);
+  status.textContent = bits.join(" · ");
+  list.innerHTML = sections.join("");
+}
+
 async function ensureScheduleFilters() {
   if (filterData) return;
   await loadFilters();
@@ -1075,8 +1945,12 @@ async function ensureScheduleFilters() {
 
 async function route() {
   const { parts, params } = parseHash();
-  const view = parts[0] || "schedule";
+  const view = parts[0] || "favorites";
 
+  if (view === "favorites" || view === "my-teams" || view === "home" || view === "following") {
+    await loadFavorites();
+    return;
+  }
   if (view === "standings") {
     showView("standings", "Standings");
     const status = document.getElementById("standings-status");
@@ -1084,6 +1958,9 @@ async function route() {
     suppressStandingsEvents = true;
     try {
       if (params.season_id) standingsForm.elements.season_id.value = params.season_id;
+      if (params.gender && standingsForm.elements.gender) {
+        standingsForm.elements.gender.value = params.gender;
+      }
       if (params.division) standingsForm.elements.division.value = params.division;
       if (params.type) {
         const typeEl = standingsTypeSelect(standingsForm);
@@ -1162,15 +2039,36 @@ form.addEventListener("change", async (event) => {
 pagerEl.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-page]");
   if (!button || button.disabled) return;
-  page = Number(button.dataset.page);
+  const next = Number(button.dataset.page);
+  if (!Number.isFinite(next) || next < 1 || next === page) return;
+  page = next;
   await loadGames();
+  pagerEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+});
+
+pageSizeEl?.addEventListener("change", async () => {
+  pageSize = Number(pageSizeEl.value) || 25;
+  page = 1;
+  await loadGames();
+});
+
+document.getElementById("team-teamsnap-export")?.addEventListener("click", () => {
+  if (!teamFutureGamesCache.length || !teamFutureExportCtx) return;
+  downloadTeamsnapCsv(
+    teamFutureGamesCache,
+    teamFutureExportCtx.teamId,
+    teamFutureExportCtx.teamName,
+  );
 });
 
 standingsForm.addEventListener("change", async (event) => {
   if (suppressStandingsEvents) return;
   const name = event.target.name;
-  if (["season_id", "division", "type"].includes(name)) {
-    await loadStandingsSchedules({ preserveSchedule: name !== "season_id", autoSelect: true });
+  if (["season_id", "gender", "division", "type"].includes(name)) {
+    await loadStandingsSchedules({
+      preserveSchedule: name !== "season_id" && name !== "gender",
+      autoSelect: true,
+    });
   } else if (name === "schedule_id") {
     updateStandingsGroups();
     renderStandingsScheduleList();
@@ -1203,6 +2101,28 @@ leadersForm.addEventListener("change", async (event) => {
   });
 });
 
+teamForm.addEventListener("change", (event) => {
+  if (!currentTeamId) return;
+  const { params } = parseHash();
+  const next = {
+    season_id: params.season_id || filterData?.defaultSeason || "2026-27",
+  };
+  const type = teamForm.elements.type.value;
+  const scheduleId = teamForm.elements.schedule_id.value;
+  if (event.target.name === "type") {
+    if (type) next.type = type;
+    else next.scope = "all";
+  } else if (scheduleId) {
+    if (type) next.type = type;
+    next.schedule_id = scheduleId;
+  } else if (type) {
+    next.type = type;
+  } else {
+    next.scope = "all";
+  }
+  setHash(`team/${currentTeamId}`, next);
+});
+
 searchForm.addEventListener("submit", (event) => {
   event.preventDefault();
   setHash("search", {
@@ -1217,6 +2137,44 @@ window.addEventListener("hashchange", () => {
   });
 });
 
+document.addEventListener("click", (event) => {
+  const btn = event.target.closest("button.favorite-btn, button.follow-btn");
+  if (!btn) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const type = btn.dataset.favType || "team";
+  const entry =
+    type === "player"
+      ? {
+          type: "player",
+          participantId: btn.dataset.favParticipant,
+          seasonId: btn.dataset.favSeason,
+          scheduleId: btn.dataset.favSchedule || null,
+          teamId: btn.dataset.favTeam || null,
+          name: btn.dataset.favName || "",
+        }
+      : {
+          type: "team",
+          teamId: btn.dataset.favTeam || btn.dataset.followTeam,
+          seasonId: btn.dataset.favSeason || btn.dataset.followSeason,
+          scheduleId: btn.dataset.favSchedule || btn.dataset.followSchedule || null,
+          name: btn.dataset.favName || btn.dataset.followName || "",
+          logoUrl: btn.dataset.favLogo || btn.dataset.followLogo || null,
+        };
+  const on = toggleFavorite(entry);
+  btn.classList.toggle("on", on);
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+  const label = entry.name || (type === "player" ? "player" : "team");
+  const verb = on ? "Remove from favorites" : "Add to favorites";
+  btn.setAttribute("aria-label", `${verb}: ${label}`);
+  btn.title = verb;
+  const { parts } = parseHash();
+  const view = parts[0] || "favorites";
+  if (view === "favorites" || view === "my-teams" || view === "home" || view === "following") {
+    loadFavorites().catch(console.error);
+  }
+});
+
 (async function init() {
   // Standings/leaders/search/team/player/game are SQLite-only — never wait on Spordle.
   // Schedule tab loads Spordle filters lazily via ensureScheduleFilters().
@@ -1225,8 +2183,11 @@ window.addEventListener("hashchange", () => {
   } catch (err) {
     console.error(err);
     const { parts } = parseHash();
-    const view = parts[0] || "schedule";
-    if (isStandingsFamily(view)) {
+    const view = parts[0] || "favorites";
+    if (view === "favorites" || view === "my-teams") {
+      const status = document.getElementById("favorites-status");
+      if (status) status.textContent = `Could not load Favorites: ${err.message}`;
+    } else if (isStandingsFamily(view)) {
       const standingsStatus = document.getElementById("standings-status");
       if (standingsStatus) standingsStatus.textContent = `Could not load standings: ${err.message}`;
     } else {

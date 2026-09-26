@@ -18,16 +18,17 @@
         rel="stylesheet"
       />
     </noscript>
-    <link rel="stylesheet" href="/static/styles.css?v=20260925i" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260925z" />
   </head>
   <body>
     <header class="top">
       <div>
         <p class="kicker">Pacific Coast Amateur Hockey Association</p>
-        <h1 id="page-title">Schedule</h1>
+        <h1 id="page-title">Favorites</h1>
       </div>
       <div class="top-right">
         <nav class="main-nav" aria-label="Primary">
+          <a href="#/favorites" data-nav="favorites" class="tab">Favorites</a>
           <a href="#/schedule" data-nav="schedule" class="tab">Schedule</a>
           <a href="#/standings" data-nav="standings" class="tab">Standings</a>
         </nav>
@@ -35,15 +36,27 @@
       </div>
     </header>
 
-    <section id="view-schedule" class="view">
+    <section id="view-favorites" class="view">
+      <p id="favorites-status" class="status"></p>
+      <div id="favorites-list" class="favorites-list"></div>
+    </section>
+
+    <section id="view-schedule" class="view" hidden>
       <form id="filters" class="filters">
-        <label>
-          Date
-          <input type="date" name="day" />
-        </label>
         <label>
           Season
           <select name="season_id"></select>
+        </label>
+        <label>
+          Show
+          <select name="date_mode">
+            <option value="day">On this date</option>
+            <option value="upcoming">Upcoming from date</option>
+          </select>
+        </label>
+        <label>
+          Date
+          <input type="date" name="day" />
         </label>
         <label>
           Association
@@ -71,6 +84,16 @@
         </label>
       </form>
       <p id="status" class="status">Loading filters…</p>
+      <div class="list-toolbar">
+        <label class="page-size">
+          Per page
+          <select id="page-size" name="page_size">
+            <option value="25" selected>25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </select>
+        </label>
+      </div>
       <div id="games" class="games"></div>
       <nav id="pager" class="pager" hidden></nav>
     </section>
@@ -85,6 +108,10 @@
         <label>
           Season
           <select name="season_id"></select>
+        </label>
+        <label>
+          Gender
+          <select name="gender"><option value="">All genders</option></select>
         </label>
         <label>
           Age / Division
@@ -117,6 +144,16 @@
         <a href="#/leaders" data-subnav="leaders">Leaders</a>
         <a href="#/search" data-subnav="search">Search</a>
       </nav>
+      <form id="team-filters" class="filters">
+        <label>
+          Type
+          <select name="type"><option value="">All types</option></select>
+        </label>
+        <label>
+          Schedule
+          <select name="schedule_id"><option value="">All schedules</option></select>
+        </label>
+      </form>
       <p id="team-status" class="status">Loading team…</p>
       <div id="team-header" class="detail-header"></div>
       <h2 class="section-title">Skaters</h2>
@@ -125,6 +162,14 @@
       <div id="team-goalies" class="table-wrap"></div>
       <h2 class="section-title">Recent games</h2>
       <div id="team-games" class="games"></div>
+      <div class="section-heading-row">
+        <h2 class="section-title">Future games</h2>
+        <button type="button" id="team-teamsnap-export" class="btn-export" hidden>
+          Export to Teamsnap
+        </button>
+      </div>
+      <p id="team-future-status" class="status muted"></p>
+      <div id="team-future-games" class="games"></div>
     </section>
 
     <section id="view-leaders" class="view" hidden>
@@ -203,6 +248,6 @@
       <div id="game-lineups" class="lineups-grid"></div>
     </section>
 
-    <script src="/static/app.js?v=20260925i"></script>
+    <script src="/static/app.js?v=20260925z"></script>
   </body>
 </html>
